@@ -67,39 +67,22 @@ C = [zeros(1,9) 1 0 0;
      zeros(1,11) 1];
  
 u = [m*g; 0; 0; 0];
+% input vector
+% u = [b*(omega(1)^2 + omega(2)^2 + omega(3)^2 + omega(4)^2);
+%       b*l*(omega(3)^2 - omega(1)^2);
+%       b*l*(omega(4)^2 - omega(2)^2);
+%       d*(omega(2)^2 + omega(4)^2 - omega(1)^2 - omega(3)^2)];
+
 
 sys = ss(A,B,C,[], 0.01);
 sys.InputName = {'thrust', 'torque_x', 'torque_y', 'torque_z'};
-sys.InputGroup.thrust = [1];
-sys.InputGroup.torques = [2,3,4];
+%sys.InputGroup.thrust = [1];
+%sys.InputGroup.torques = [2,3,4];
 sys.InputUnit = {'N', 'N m', 'N m', 'N m'};
 sys.OutputName = {'X', 'Y', 'Z'};
 sys.OutputUnit = {'m', 'm', 'm'};
 %step(sys);
 initial(sys, x0);
-
-% for i = t
-%     if i == num_time_steps
-%        break;
-%     end
-% 
-%     % input vector
-%     % u = [b*(omega(1)^2 + omega(2)^2 + omega(3)^2 + omega(4)^2);
-%     %       b*l*(omega(3)^2 - omega(1)^2);
-%     %       b*l*(omega(4)^2 - omega(2)^2);
-%     %       d*(omega(2)^2 + omega(4)^2 - omega(1)^2 - omega(3)^2)];
-%     u(:,i) = [m*g; 0; 0; 0];
-% 
-%     % disturbance vector
-%     d = zeros(6,1);
-% 
-%     
-%     % linear model
-%     %x(:,i+1) = A*x(:,i) + B*u(:,i) + D*d; 
-%     
-%     x(:,i+1) = c + x(:,i);
-% 
-% end
 
 
 
