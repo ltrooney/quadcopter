@@ -1,0 +1,239 @@
+% parameters from erkka http://sal.aalto.fi/publications/pdf-files/eluu11_public.pdf
+
+m = 0.468;
+g = 9.81;
+
+Ix = 4.856e-3;
+Iy = Ix;
+Iz = 8.801e-3;
+I = [Ix 0 0; 0 Iy 0; 0 0 Iz];
+
+L = .225;
+b = 1.140e-7;   % drag constant
+k = 2.980e-6;   % lift constant
+kd = 0.25;      % drag force coefficients
+    
+% time
+
+t0 = 0;
+tf = 10;
+dt = 0.005;
+times = t0:dt:tf;
+N = length(times);
+
+
+% state data
+
+linPosE = [0; 0; 5];    % [x, y, z]
+linVelsE = zeros(3, 1);  % [u, v, w]
+angles = zeros(3, 1);   % [roll, pitch, yaw]
+
+dev = 100;
+angVelsE = deg2rad(2 * dev * rand(3, 1) - dev);  % [p, q, r]
+
+% simulation
+
+state = zeros(12, N);
+
+acc = zeros(3,N);
+
+i = 1;
+
+for t = times
+       
+   input = pd_controller(angles,angVelsE,m,g,k,b,L,I);
+   
+   % convert angular velocities from E frame to B frame
+   angVelsB = angVelsE2B(angVelsE, angles); % [p q r]
+   
+   % linear acceleration
+   gravity = [0; 0; -g];
+   R = rotate(angles);
+   Tb = [0; 0; k*sum(input)];
+   Fd = -kd * linVelsE;
+   
+   linAccE = gravity + ((1/m) * (R * Tb)) + Fd;
+   
+   acc(:,i) = R(:,3);
+   
+   % angular acceleration
+   torques = [
+        L * k * (input(1) - input(3));
+        L * k * (input(2) - input(4));
+        b * (input(1) - input(2) + input(3) - input(4))
+   ];
+   angAccB = I\(torques - cross(angVelsB, I * angVelsB));
+   
+   % update state
+   state(:,i) = [linPosE; linVelsE; angles; angVelsB];
+   
+   angVelsB = angVelsB + (dt .* angAccB);
+   angVelsE = angVelsB2E(angVelsB, angles);
+   angles = angles + (dt .* angVelsE);
+   linVelsE = linVelsE + (dt .* linAccE);
+   linPosE = linPosE + (dt .* linVelsE);   
+    
+    i = i + 1;    
+end
+
+x = state(1,:);
+y = state(2,:);
+z = state(3,:);
+u = state(4,:);
+v = state(5,:);
+w = state(6,:);
+roll = state(7,:);
+pitch = state(8,:);
+yaw = state(9,:);
+p = state(10,:);
+q = state(11,:);
+r = state(12,:);
+
+
+plot2d = true;
+
+if plot2d
+    
+    close all
+
+    plotVelocityVectors = false;
+    
+    if plotVelocityVectors
+        for i = 1:N
+            if mod(i,50) == 0
+                quiver(x(i),z(i),u(i),w(i));
+                hold on
+                quiver(y(i),z(i),v(i),w(i));
+            end
+        end
+        hold off
+    else
+        subplot(2,2,1);
+        plot(times,x,'DisplayName','x');
+        hold on
+        plot(times,y,'DisplayName','y');
+        plot(times,z,'DisplayName','z');
+        title('position');
+        legend
+        hold off
+        
+        subplot(2,2,2);
+        plot(times,u,'DisplayName','u');
+        hold on
+        plot(times,v,'DisplayName','v');
+        plot(times,w,'DisplayName','w');
+        title('linear velocity');
+        legend
+        hold off
+        
+        subplot(2,2,3);
+        plot(times,roll,'DisplayName','roll');
+        hold on
+        plot(times,pitch,'DisplayName','pitch');
+        plot(times,yaw,'DisplayName','yaw');
+        title('angles');
+        legend
+        hold off
+        
+        subplot(2,2,4);
+        plot(times,p,'DisplayName','p');
+        hold on
+        plot(times,q,'DisplayName','q');
+        plot(times,r,'DisplayName','r');
+        title('angular velocity');
+        legend
+        hold off
+        
+    end
+end
+
+
+plot3d = false;
+
+if plot3d
+   
+    for i = 1:N
+        if mod(i,50) == 0
+           plot3(x(i), y(i), z(i), '*r');
+           %quiver3(x(i),y(i),z(i),u(i),v(i),w(i));
+           axis([-5 5 -5 5 -3 20]);
+           title(i * dt);
+           grid on
+           hold on
+        end
+        pause(0.005);
+    end
+    
+end
+
+function i = pd_controller(angles,angVelsE,m,g,k,b,L,I)
+    Ix = I(1,1);
+    Iy = I(2,2);
+    Iz = I(3,3);
+    
+    % pid controller
+    Kp = 15;    % 25
+    Kd = 5;
+
+    error = (Kd * angVelsE) + (Kp * angles);
+    
+    i = errorToInput(error,angles,m,g,b,k,L,I);
+end
+
+function [i, errorIntegral] = pid_controller(angles,angVelsE,m,g,k,b,L,I,errorIntegral,dt)
+    % pid controller
+    Kp = 15;
+    Kd = 5;
+    Ki = 5;
+
+    error = (Kd * angVelsE) + (Kp * angles) + (Ki * pidIntegral);
+    
+    errorIntegral = errorIntegral + (dt .
+    i = errorToInput(error,angles,m,g,b,k,L,I);
+end
+
+function i = errorToInput(error,angles,m,g,b,k,L,I)
+    Ix = I(1,1);
+    Iy = I(2,2);
+    Iz = I(3,3);
+        
+    % solve for inputs
+    input = zeros(4,1);
+    thrustTerm = (m*g) / (4*k*cos(angles(2))*cos(angles(1)));
+    input(1) = thrustTerm - ((2*b*error(1)*Ix) + (error(3)*Iz*k*L))/(4*b*k*L);
+    input(2) = thrustTerm + ((error(3)*Iz)/(4*b)) - ((error(2)*Iy)/(2*k*L));
+    input(3) = thrustTerm - ((-2*b*error(1)*Ix) + (error(3)*Iz*k*L))/(4*b*k*L);
+    input(4) = thrustTerm + ((error(3)*Iz)/(4*b)) + ((error(2)*Iy)/(2*k*L));
+    
+    i = input;
+end
+
+
+function omega = angVelsE2B(angVelsE, angles)
+    omega = T(angles) * angVelsE;
+end
+
+function thetadot = angVelsB2E(angVelsB, angles)
+    thetadot = T(angles)\angVelsB;
+end
+
+function r = rotate(angles)
+    c = cos(angles);
+    s = sin(angles);
+    r = [(c(1)*c(3))-(c(2)*s(1)*s(3)) (-c(3)*s(1))-(c(1)*c(2)*s(3)) s(2)*s(3);
+        (c(1)*s(3))+(c(2)*c(3)*s(1)) (c(1)*c(2)*c(3))-(s(1)*s(3)) -c(3)*s(2);
+        s(1)*s(2) c(1)*s(2) c(2)];
+end
+
+function t = T(angles)
+    roll = angles(1);
+    pitch = angles(2);
+    t = [
+        1 0 -sin(pitch); 
+        0 cos(roll) cos(pitch)*sin(roll);
+        0 -sin(roll) cos(pitch)*cos(roll)
+    ];
+end
+
+
+
