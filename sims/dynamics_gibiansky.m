@@ -6,7 +6,7 @@ g = 9.81;
 Ix = 4.856e-3;
 Iy = Ix;
 Iz = 8.801e-3;
-I = [Ix 0 0; 0 Iy 0; 0 0 Iz];
+I = diag([Ix,Iy,Iz]);
 
 L = .225;
 b = 1.140e-7;   % drag constant
@@ -14,6 +14,9 @@ k = 2.980e-6;   % lift constant
 kd = 0.25;      % drag force coefficients
 
 errorIntegral = zeros(3,1);
+
+global params
+params = struct('m',m,'g',g,'I',I,'L',L,'b',b,'k',k,'dt',dt,'errorIntegral',errorIntegral);
     
 % time
 
@@ -43,38 +46,37 @@ i = 1;
 
 for t = times
        
-   %input = pd_controller(angles,angVelsE,m,g,k,b,L,I);
-   [input, errorIntegral] = pid_controller(angles,angVelsE,m,g,k,b,L,I,errorIntegral,dt);
+    input = controller(angles,angVelsE,'pid');
    
-   % convert angular velocities from E frame to B frame
-   angVelsB = angVelsE2B(angVelsE, angles); % [p q r]
+    % convert angular velocities from E frame to B frame
+    angVelsB = angVelsE2B(angVelsE, angles); % [p q r]
    
-   % linear acceleration
-   gravity = [0; 0; -g];
-   R = rotate(angles);
-   Tb = [0; 0; k*sum(input)];
-   Fd = -kd * linVelsE;
+    % linear acceleration
+    gravity = [0; 0; -g];
+    R = rotate(angles);
+    Tb = [0; 0; k*sum(input)];
+    Fd = -kd * linVelsE;
    
-   linAccE = gravity + ((1/m) * (R * Tb)) + Fd;
+    linAccE = gravity + ((1/m) * (R * Tb)) + Fd;
    
-   acc(:,i) = R(:,3);
+    acc(:,i) = R(:,3);
    
-   % angular acceleration
-   torques = [
+    % angular acceleration
+    torques = [
         L * k * (input(1) - input(3));
         L * k * (input(2) - input(4));
         b * (input(1) - input(2) + input(3) - input(4))
-   ];
-   angAccB = I\(torques - cross(angVelsB, I * angVelsB));
+    ];
+    angAccB = I\(torques - cross(angVelsB, I * angVelsB));
    
-   % update state
-   state(:,i) = [linPosE; linVelsE; angles; angVelsB];
+    % update state
+    state(:,i) = [linPosE; linVelsE; angles; angVelsB];
    
-   angVelsB = angVelsB + (dt .* angAccB);
-   angVelsE = angVelsB2E(angVelsB, angles);
-   angles = angles + (dt .* angVelsE);
-   linVelsE = linVelsE + (dt .* linAccE);
-   linPosE = linPosE + (dt .* linVelsE);   
+    angVelsB = angVelsB + (dt .* angAccB);
+    angVelsE = angVelsB2E(angVelsB, angles);
+    angles = angles + (dt .* angVelsE);
+    linVelsE = linVelsE + (dt .* linAccE);
+    linPosE = linPosE + (dt .* linVelsE);   
     
     i = i + 1;    
 end
@@ -169,35 +171,45 @@ if plot3d
     
 end
 
-function i = pd_controller(angles,angVelsE,m,g,k,b,L,I)
-    Kp = 15;
-    Kd = 5;
 
-    error = (Kd * angVelsE) + (Kp * angles);
+function i = controller(angles, angVelsE, type)
+    global params
+   
+    if nargin < 3
+        type = 'pid';
+    end
     
-    i = errorToInput(error,angles,m,g,b,k,L,I);
-end
-
-function [i, errorIntegral] = pid_controller(angles,angVelsE,m,g,k,b,L,I,errorIntegral,dt)
     Kp = 15;
     Kd = 5;
     Ki = 3;
     
-    if max(abs(errorIntegral)) > 0.01
-       errorIntegral(:) = 0; 
+    if strcmp(type,'pd')
+        error = (Kd * angVelsE) + (Kp * angles);
+    elseif strcmp(type,'pid')
+        if max(abs(params.errorIntegral)) > 0.01
+            params.errorIntegral(:) = 0; 
+        end
+    
+        error = (Kd * angVelsE) + (Kp * angles) - (Ki * params.errorIntegral);
+        params.errorIntegral = params.errorIntegral + (params.dt .* angles);
+    else
+        error = 0;
     end
-
-    error = (Kd * angVelsE) + (Kp * angles) - (Ki * errorIntegral);
     
-    errorIntegral = errorIntegral + (dt .* angles);
-    
-    i = errorToInput(error,angles,m,g,b,k,L,I);
+    i = errorToInput(error,angles);
 end
 
-function i = errorToInput(error,angles,m,g,b,k,L,I)
-    Ix = I(1,1);
-    Iy = I(2,2);
-    Iz = I(3,3);
+function i = errorToInput(error,angles)
+    global params
+    
+    Ix = params.I(1,1);
+    Iy = params.I(2,2);
+    Iz = params.I(3,3);
+    m = params.m;
+    g = params.g;
+    b = params.b;
+    k = params.k;
+    L = params.L;
         
     % solve for inputs
     input = zeros(4,1);

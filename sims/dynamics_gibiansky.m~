@@ -6,12 +6,17 @@ g = 9.81;
 Ix = 4.856e-3;
 Iy = Ix;
 Iz = 8.801e-3;
-I = [Ix 0 0; 0 Iy 0; 0 0 Iz];
+I = diag([Ix,Iy,Iz]);
 
 L = .225;
 b = 1.140e-7;   % drag constant
 k = 2.980e-6;   % lift constant
 kd = 0.25;      % drag force coefficients
+
+errorIntegral = zeros(3,1);
+
+global params
+params = struct('m',m,'g',g,'I',I,'L',L,'b',b,'k',k);
     
 % time
 
@@ -41,7 +46,8 @@ i = 1;
 
 for t = times
        
-   input = pd_controller(angles,angVelsE,m,g,k,b,L,I);
+   %input = pd_controller(angles,angVelsE,m,g,k,b,L,I);
+   [input, errorIntegral] = pid_controller(angles,angVelsE,m,g,k,b,L,I,errorIntegral,dt);
    
    % convert angular velocities from E frame to B frame
    angVelsB = angVelsE2B(angVelsE, angles); % [p q r]
@@ -167,12 +173,7 @@ if plot3d
 end
 
 function i = pd_controller(angles,angVelsE,m,g,k,b,L,I)
-    Ix = I(1,1);
-    Iy = I(2,2);
-    Iz = I(3,3);
-    
-    % pid controller
-    Kp = 15;    % 25
+    Kp = 15;
     Kd = 5;
 
     error = (Kd * angVelsE) + (Kp * angles);
@@ -181,25 +182,34 @@ function i = pd_controller(angles,angVelsE,m,g,k,b,L,I)
 end
 
 function [i, errorIntegral] = pid_controller(angles,angVelsE,m,g,k,b,L,I,errorIntegral,dt)
-    % pid controller
     Kp = 15;
     Kd = 5;
-    Ki = 5;
-
-    error = (Kd * angVelsE) + (Kp * angles) + (Ki * pidIntegral);
+    Ki = 3;
     
-    errorIntegral = errorIntegral + (dt .
+    if max(abs(errorIntegral)) > 0.01
+       errorIntegral(:) = 0; 
+    end
+
+    error = (Kd * angVelsE) + (Kp * angles) - (Ki * errorIntegral);
+    
+    errorIntegral = errorIntegral + (dt .* angles);
+    
     i = errorToInput(error,angles,m,g,b,k,L,I);
 end
 
 function i = errorToInput(error,angles,m,g,b,k,L,I)
-    Ix = I(1,1);
-    Iy = I(2,2);
-    Iz = I(3,3);
+    global params
+    
+    Ix = params.I(1,1);
+    Iy = params.I(2,2);
+    Iz = params.I(3,3);
+    m = params.m;
+    g = params.g;
+    b = params.b
         
     % solve for inputs
     input = zeros(4,1);
-    thrustTerm = (m*g) / (4*k*cos(angles(2))*cos(angles(1)));
+    thrustTerm = (params.m*params.g) / (4*k*cos(angles(2))*cos(angles(1)));
     input(1) = thrustTerm - ((2*b*error(1)*Ix) + (error(3)*Iz*k*L))/(4*b*k*L);
     input(2) = thrustTerm + ((error(3)*Iz)/(4*b)) - ((error(2)*Iy)/(2*k*L));
     input(3) = thrustTerm - ((-2*b*error(1)*Ix) + (error(3)*Iz*k*L))/(4*b*k*L);
