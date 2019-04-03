@@ -18,7 +18,7 @@ errorIntegral = zeros(3,1);
 % time
 
 t0 = 0;
-tf = 10;
+tf = 8;
 dt = 0.005;
 times = t0:dt:tf;
 N = length(times);
@@ -29,26 +29,39 @@ linPosE = [0; 0; 5];    % [x, y, z]
 linVelsE = zeros(3, 1);  % [u, v, w]
 angles = zeros(3, 1);   % [roll, pitch, yaw]
 
-dev = 100;
+dev = 350;
 angVelsE = deg2rad(2 * dev * rand(3, 1) - dev);  % [p, q, r]
 
 % simulation
 
+% desired height as step function
+z_step = zeros(1,N);
+z_step(1:250) = 5;
+z_step(250:N) = 10;
+
+% desired height as sine function
+z_sin = 5*sin(times) + 10;
+
+global trajectory
+trajectory = struct('z',z_sin,'zVel',zeros(1,N),'angles',zeros(3,N),'angVels',zeros(3,N));
+
 global params
-params = struct('m',m,'g',g,'I',I,'L',L,'b',b,'k',k,'dt',dt,'errorIntegral',errorIntegral);
+params = struct('m',m,'g',g,'I',I,'L',L,'b',b,'k',k,'dt',dt,...
+    'errorIntegral',errorIntegral);
 
 state = zeros(16, N);
-
-acc = zeros(3,N);
 
 i = 1;
 
 for t = times
        
-    input = controller(angles,angVelsE,'pid');
+    input = controller(angles, angVelsE, linPosE, linVelsE, i, 'inner');
    
     % convert angular velocities from E frame to B frame
     angVelsB = angVelsE2B(angVelsE, angles); % [p q r]
+    
+    % update state
+    state(:,i) = [linPosE; linVelsE; angles; angVelsB; input];
    
     % linear acceleration
     gravity = [0; 0; -g];
@@ -56,10 +69,8 @@ for t = times
     Tb = [0; 0; k*sum(input)];
     Fd = -kd * linVelsE;
    
-    linAccE = gravity + ((1/m) * (R * Tb)) + Fd;
-   
-    acc(:,i) = R(:,3);
-   
+    linAccE = gravity + (1/m) .* ((R * Tb) + Fd);
+      
     % angular acceleration
     torques = [
         L * k * (input(1) - input(3));
@@ -67,10 +78,7 @@ for t = times
         b * (input(1) - input(2) + input(3) - input(4))
     ];
     angAccB = I\(torques - cross(angVelsB, I * angVelsB));
-   
-    % update state
-    state(:,i) = [linPosE; linVelsE; angles; angVelsB; input];
-   
+      
     angVelsB = angVelsB + (dt .* angAccB);
     angVelsE = angVelsB2E(angVelsB, angles);
     angles = angles + (dt .* angVelsE);
@@ -96,7 +104,7 @@ p = state(10,:);
 q = state(11,:);
 r = state(12,:);
 
-visualize_test(data);
+%visualize_test(data);
 
 plot2d = false;
 
@@ -108,7 +116,7 @@ if plot2d
     
     if plotVelocityVectors
         for i = 1:N
-            if mod(i,50) == 0
+            if mod(i,N/20) == 0
                 quiver(x(i),z(i),u(i),w(i));
                 hold on
                 quiver(y(i),z(i),v(i),w(i));
@@ -156,15 +164,15 @@ if plot2d
 end
 
 
-plot3d = false;
+plot3d = true;
 
 if plot3d
    
     for i = 1:N
-        if mod(i,50) == 0
+        if mod(i,10) == 0
            plot3(x(i), y(i), z(i), '*r');
            %quiver3(x(i),y(i),z(i),u(i),v(i),w(i));
-           axis([-5 5 -5 5 -3 20]);
+           axis([-10 10 -10 10 0 15]);
            title(i * dt);
            grid on
            hold on
@@ -175,16 +183,20 @@ if plot3d
 end
 
 
-function i = controller(angles, angVelsE, type)
-    global params
+function i = controller(angles, angVelsE, pos, vels, t, type)
+    global params trajectory
    
-    if nargin < 3
+    if nargin < 6
         type = 'pid';
     end
     
     Kp = 15;
     Kd = 5;
     Ki = 3;
+    Kpz = 25;
+    Kdz = 10;
+    
+    thrustTerm = (params.m*params.g) / (4*params.k);
     
     if strcmp(type,'pd')
         error = (Kd * angVelsE) + (Kp * angles);
@@ -195,33 +207,34 @@ function i = controller(angles, angVelsE, type)
     
         error = (Kd * angVelsE) + (Kp * angles) - (Ki * params.errorIntegral);
         params.errorIntegral = params.errorIntegral + (params.dt .* angles);
+    elseif strcmp(type,'inner')
+        thrust = (params.g + Kdz*(trajectory.zVel(t) - vels(3)) ...
+            + Kpz*(trajectory.z(t) - pos(3)))*params.m/(cos(angles(2))*cos(angles(1)));
+        
+        error =  (Kd * (trajectory.angVels(:,t) - angVelsE)) + (Kp * (trajectory.angles(:,t) - angles));
+        
+        thrustTerm = thrust / (4*params.k);        
     else
         error = 0;
     end
     
-    i = errorToInput(error,angles);
+    i = errorToInput(error, thrustTerm);
 end
 
-function i = errorToInput(error,angles)
+function i = errorToInput(error,thrustTerm)
     global params
-    
-    Ix = params.I(1,1);
-    Iy = params.I(2,2);
-    Iz = params.I(3,3);
-    m = params.m;
-    g = params.g;
-    b = params.b;
-    k = params.k;
-    L = params.L;
         
-    % solve for inputs
-    input = zeros(4,1);
-    thrustTerm = (m*g) / (4*k*cos(angles(2))*cos(angles(1)));
-    input(1) = thrustTerm - ((2*b*error(1)*Ix) + (error(3)*Iz*k*L))/(4*b*k*L);
-    input(2) = thrustTerm + ((error(3)*Iz)/(4*b)) - ((error(2)*Iy)/(2*k*L));
-    input(3) = thrustTerm - ((-2*b*error(1)*Ix) + (error(3)*Iz*k*L))/(4*b*k*L);
-    input(4) = thrustTerm + ((error(3)*Iz)/(4*b)) + ((error(2)*Iy)/(2*k*L));
+    % solve for inputs    
+    torques = params.I * error;
+    rollTerm = torques(1)/(2*params.k*params.L);
+    pitchTerm =  torques(2)/(2*params.k*params.L);
+    yawTerm = torques(3)/(4*params.b);
     
+    input = zeros(4,1);
+    input(1) = thrustTerm + rollTerm + yawTerm;
+    input(2) = thrustTerm + pitchTerm - yawTerm;
+    input(3) = thrustTerm - rollTerm + yawTerm;
+    input(4) = thrustTerm - pitchTerm - yawTerm;
     i = input;
 end
 
@@ -326,7 +339,9 @@ function animate(data, model, thrusts, plots)
         ymax = data.x(2,t)+20;
         zmin = data.x(3,t)-5;
         zmax = data.x(3,t)+5;
-        axis([xmin xmax ymin ymax zmin zmax]);
+        %axis([xmin xmax ymin ymax zmin zmax]);
+        scale = 25;
+        axis([-scale scale -scale scale 0 20]);
         drawnow;
 
         % Use the bottom two parts for angular velocity and displacement.
