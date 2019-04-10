@@ -55,7 +55,7 @@ i = 1;
 
 for t = times
        
-    input = controller(angles, angVelsE, linPosE, linVelsE, i, 'inner');
+    input = controller(angles, angVelsE, linPosE, linVelsE, i, 'z_attitude_inner');
    
     % convert angular velocities from E frame to B frame
     angVelsB = angVelsE2B(angVelsE, angles); % [p q r]
@@ -104,7 +104,7 @@ p = state(10,:);
 q = state(11,:);
 r = state(12,:);
 
-%visualize_test(data);
+visualize_test(data);
 
 plot2d = false;
 
@@ -164,7 +164,7 @@ if plot2d
 end
 
 
-plot3d = true;
+plot3d = false;
 
 if plot3d
    
@@ -187,7 +187,7 @@ function i = controller(angles, angVelsE, pos, vels, t, type)
     global params trajectory
    
     if nargin < 6
-        type = 'pid';
+        type = 'attitude_pid';
     end
     
     Kp = 15;
@@ -198,16 +198,19 @@ function i = controller(angles, angVelsE, pos, vels, t, type)
     
     thrustTerm = (params.m*params.g) / (4*params.k);
     
-    if strcmp(type,'pd')
-        error = (Kd * angVelsE) + (Kp * angles);
-    elseif strcmp(type,'pid')
+    if strcmp(type,'attitude_pd')
+        error =  (Kd * (trajectory.angVels(:,t) - angVelsE)) + ...
+            (Kp * (trajectory.angles(:,t) - angles));
+    elseif strcmp(type,'attitude_pid')
         if max(abs(params.errorIntegral)) > 0.01
             params.errorIntegral(:) = 0; 
         end
     
-        error = (Kd * angVelsE) + (Kp * angles) - (Ki * params.errorIntegral);
-        params.errorIntegral = params.errorIntegral + (params.dt .* angles);
-    elseif strcmp(type,'inner')
+        error =  (Kd * (trajectory.angVels(:,t) - angVelsE)) + ...
+            (Kp * (trajectory.angles(:,t) - angles)) - ...
+            (Ki * params.errorIntegral);
+        params.errorIntegral = params.errorIntegral + (params.dt .* (trajectory.angles(:,t) - angles));
+    elseif strcmp(type,'z_attitude_inner')
         thrust = (params.g + Kdz*(trajectory.zVel(t) - vels(3)) ...
             + Kpz*(trajectory.z(t) - pos(3)))*params.m/(cos(angles(2))*cos(angles(1)));
         
