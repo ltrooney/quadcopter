@@ -12,8 +12,6 @@ L = .225;
 b = 1.140e-7;   % drag constant
 k = 2.980e-6;   % lift constant
 kd = 0.25;      % drag force coefficients
-
-errorIntegral = zeros(3,1);
     
 % time
 
@@ -43,25 +41,33 @@ z_step(250:N) = 10;
 z_sin = 5*sin(times) + 10;
 
 global trajectory
-trajectory = struct('z',z_sin,'zVel',zeros(1,N),'angles',zeros(3,N),'angVels',zeros(3,N));
+trajectory = struct('z',z_step,'zVel',zeros(1,N),'angles',zeros(3,N),'angVels',zeros(3,N));
 
 global params
-params = struct('m',m,'g',g,'I',I,'L',L,'b',b,'k',k,'dt',dt,...
-    'errorIntegral',errorIntegral);
+params = struct('m',m,'g',g,'I',I,'L',L,'b',b,'k',k,'dt',dt);
 
-state = zeros(16, N);
+global state
+state = struct('linPosE',linPosE,'linVelsE',linVelsE,'angles',angles,'angVelsE',angVelsE);
+
+global controller_params
+controller_params = struct('lastError', zeros(3,1), 'errorIntegral', zeros(3,1),'dt',dt);
+
+tempState = zeros(16, N);
 
 i = 1;
+lastThrust = 0;
 
 for t = times
        
-    input = controller(angles, angVelsE, linPosE, linVelsE, i, 'z_attitude_inner');
-   
+    %input = controller(angles, angVelsE, linPosE, linVelsE, i, 'z_attitude_inner');
+    input = temp_controller(i, 0, 0, 0, lastThrust);
+    lastThrust = input(1);
+    
     % convert angular velocities from E frame to B frame
     angVelsB = angVelsE2B(angVelsE, angles); % [p q r]
     
     % update state
-    state(:,i) = [linPosE; linVelsE; angles; angVelsB; input];
+    tempState(:,i) = [linPosE; linVelsE; angles; angVelsB; input];
    
     % linear acceleration
     gravity = [0; 0; -g];
@@ -83,26 +89,31 @@ for t = times
     angVelsE = angVelsB2E(angVelsB, angles);
     angles = angles + (dt .* angVelsE);
     linVelsE = linVelsE + (dt .* linAccE);
-    linPosE = linPosE + (dt .* linVelsE);   
+    linPosE = linPosE + (dt .* linVelsE); 
+    
+    state.angVelsE = angVelsE;
+    state.angles = angles;
+    state.linVelsE = linVelsE;
+    state.linPosE = linPosE;
     
     i = i + 1;    
 end
 
-data = struct('x', state(1:3,:), 'theta', state(7:9,:), 'vel', state(4:6,:), ...
-                    'angvel', state(10:12,:), 't', times, 'dt', dt, 'input', state(13:16,:));
+data = struct('x', tempState(1:3,:), 'theta', tempState(7:9,:), 'vel', tempState(4:6,:), ...
+                    'angvel', tempState(10:12,:), 't', times, 'dt', dt, 'input', tempState(13:16,:));
 
-x = state(1,:);
-y = state(2,:);
-z = state(3,:);
-u = state(4,:);
-v = state(5,:);
-w = state(6,:);
-roll = state(7,:);
-pitch = state(8,:);
-yaw = state(9,:);
-p = state(10,:);
-q = state(11,:);
-r = state(12,:);
+x = tempState(1,:);
+y = tempState(2,:);
+z = tempState(3,:);
+u = tempState(4,:);
+v = tempState(5,:);
+w = tempState(6,:);
+roll = tempState(7,:);
+pitch = tempState(8,:);
+yaw = tempState(9,:);
+p = tempState(10,:);
+q = tempState(11,:);
+r = tempState(12,:);
 
 visualize_test(data);
 
@@ -182,9 +193,8 @@ if plot3d
     
 end
 
-
 function i = controller(angles, angVelsE, pos, vels, t, type)
-    global params trajectory
+    global params trajectory controller_params
    
     if nargin < 6
         type = 'attitude_pid';
@@ -203,25 +213,70 @@ function i = controller(angles, angVelsE, pos, vels, t, type)
             (Kp * (trajectory.angles(:,t) - angles));
     elseif strcmp(type,'attitude_pid')
         if max(abs(params.errorIntegral)) > 0.01
-            params.errorIntegral(:) = 0; 
+            controller_params.errorIntegral(:) = 0; 
         end
     
         error =  (Kd * (trajectory.angVels(:,t) - angVelsE)) + ...
             (Kp * (trajectory.angles(:,t) - angles)) - ...
-            (Ki * params.errorIntegral);
-        params.errorIntegral = params.errorIntegral + (params.dt .* (trajectory.angles(:,t) - angles));
+            (Ki * controller_params.errorIntegral);
+        controller_params.errorIntegral = controller_params.errorIntegral + ...
+            (controller_params.dt .* (trajectory.angles(:,t) - angles));
     elseif strcmp(type,'z_attitude_inner')
-        thrust = (params.g + Kdz*(trajectory.zVel(t) - vels(3)) ...
-            + Kpz*(trajectory.z(t) - pos(3)))*params.m/(cos(angles(2))*cos(angles(1)));
-        
-        error =  (Kd * (trajectory.angVels(:,t) - angVelsE)) + (Kp * (trajectory.angles(:,t) - angles));
-        
-        thrustTerm = thrust / (4*params.k);        
+%         thrust = (params.g + Kdz*(trajectory.zVel(t) - vels(3)) ...
+%             + Kpz*(trajectory.z(t) - pos(3)))*params.m/(cos(angles(2))*cos(angles(1)));
+%         error =  (Kd * (trajectory.angVels(:,t) - angVelsE)) + (Kp * (trajectory.angles(:,t) - angles));
+%         thrustTerm = thrust / (4*params.k);   
+        angles = zeros(3,1);
+        i = inner_controller(angles, trajectory.z(t), angVelsE, vels, pos, angles);
+        return;
     else
         error = 0;
     end
     
     i = errorToInput(error, thrustTerm);
+end
+
+function i = temp_controller(t, desired_x_acc, desired_y_acc, desired_yaw, lastThrust)
+    global params state
+    yaw = state.angles(3);
+    A = [-sin(yaw) cos(yaw); -cos(yaw) sin(yaw)];
+    acc = [desired_x_acc; desired_y_acc];
+    if t == 0 || lastThrust == 0 || norm(acc) == 0
+        desiredAttitude = [0; 0; desired_yaw];
+    else
+        desiredAttitude = [(params.m / lastThrust) .* A\acc; desired_yaw];
+    end
+    
+    i = inner_controller(t, desiredAttitude);
+end
+
+function i = inner_controller(t, desiredAttitude)
+    global params state trajectory controller_params
+    Kp = 15;
+    Ki = 3;
+    Kd = 5;
+    Kpz = 25;
+    Kdz = 10;
+    
+    thrust = (params.g + Kdz*(0 - state.linVelsE(3)) ...
+            + Kpz*(trajectory.z(t) - state.linPosE(3)))*params.m/(cos(state.angles(2))*cos(state.angles(1)));
+    thrustTerm = thrust / (4*params.k);
+        
+    
+    if max(abs(controller_params.errorIntegral)) > 0.01
+        controller_params.errorIntegral(:) = 0; 
+    end
+
+    pid =  (Kd * (zeros(3,1) - state.angVelsE)) + ...
+        (Kp * (desiredAttitude - state.angles)) - ...
+        (Ki * controller_params.errorIntegral);
+    
+    controller_params.errorIntegral = controller_params.errorIntegral + ...
+            (controller_params.dt .* (desiredAttitude - state.angles));
+        
+    %pid =  (Kd * (zeros(3,1) - state.angVelsE)) + (Kp * (desiredAttitude - state.angles));
+    
+    i = errorToInput(pid, thrustTerm);
 end
 
 function i = errorToInput(error,thrustTerm)
