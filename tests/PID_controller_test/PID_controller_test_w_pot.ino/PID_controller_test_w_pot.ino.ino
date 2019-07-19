@@ -4,14 +4,14 @@
 #include <Math.h>
 
 /* SERIAL OUTPUT DEBUG */
-#define DEBUG_BOOTUP
+//#define DEBUG_BOOTUP
 //#define DEBUG_ACC_ANGLES
 //#define DEBUG_GYRO_ANGLES
 //#define DEBUG_ANGLES
 //#define DEBUG_RX_PULSE
 //#define DEBUG_RX_DEG
 //#define DEBUG_PID
-#define DEBUG_ESC
+//#define DEBUG_ESC
 
 #ifdef DEBUG_BOOTUP
   #define PRINT_BOOTUP_SEQ(x) (Serial.print(x))
@@ -27,7 +27,7 @@
 
 /* TEST OUTPUT CONTROL */
 const bool DISABLE_MOTORS = false;  // WARNING: if this is set to false then the motors will turn on!
-const bool PRINT_LOW_VOLTAGE_WARNING  = false;
+//#define PRINT_LOW_VOLTAGE_WARNING
 
 /* PINOUT ASSIGNMENTS */
 const int PIN_LOW_VOLT_MON = A0;
@@ -82,16 +82,13 @@ static const LowPassFilter pitch_error_filter(ERROR_LP_FILTER_ALPHA);
 // PID controller variables
 static const int PID_ACTIVATION_THROTTLE = 1000;  // 1200
 static const int I_TERM_ACTIVATION_THROTTLE = 1500;
-static const float P_GAIN_ROLL = 0;  // 1.25 ; 2
-static const float D_GAIN_ROLL = 0; // 25 ; 35
-static const float I_GAIN_ROLL = 0;  // 0.03 ; 0.1
-static const float P_GAIN_PITCH = P_GAIN_ROLL;
-static const float D_GAIN_PITCH = D_GAIN_ROLL;
-static const float I_GAIN_PITCH = I_GAIN_ROLL;
-static const float P_GAIN_YAW = 2;  // 2
+static const float P_GAIN_ROLL_PITCH = 2;  // 1.25 ; 2
+static const float D_GAIN_ROLL_PITCH = 30; // 25 ; 35
+static const float I_GAIN_ROLL_PITCH = 0;  // 0.03 ; 0.1
+static const float P_GAIN_YAW = 3;  // 2
 static const float I_GAIN_YAW = 0;
-static PIDController pid_controller_roll(P_GAIN_ROLL, I_GAIN_ROLL, D_GAIN_ROLL);
-static PIDController pid_controller_pitch(P_GAIN_PITCH, I_GAIN_PITCH, D_GAIN_PITCH);
+static PIDController pid_controller_roll(P_GAIN_ROLL_PITCH, I_GAIN_ROLL_PITCH, D_GAIN_ROLL_PITCH);
+static PIDController pid_controller_pitch(P_GAIN_ROLL_PITCH, I_GAIN_ROLL_PITCH, D_GAIN_ROLL_PITCH);
 static PIDController pid_controller_yaw(P_GAIN_YAW, I_GAIN_YAW, 0);
 
 /* GLOBALS */
@@ -189,9 +186,9 @@ void loop() {
   const int sensorValue = analogRead(PIN_LOW_VOLT_MON); // read value of pin A0 (value in range 0-1023)
   const float voltage = sensorValue * (5.0 / 1023.0);   // convert sensorValue to voltage between 0V-5V
   if((voltage < VOLTAGE_MIN) && (voltage > VOLTAGE_MIN-0.5)) {
-    if(PRINT_LOW_VOLTAGE_WARNING) {
+    #ifdef PRINT_LOW_VOLTAGE_WARNING
       Serial.print("WARNING: Low voltage - ");  Serial.println(voltage);
-    }
+    #endif
     PORTB |= LOW_VOLT_LED_ENABLE;   // set digital output 13 HIGH
   } else {
     PORTB &= LOW_VOLT_LED_DISABLE; // set digital output 13 LOW
@@ -215,7 +212,7 @@ void loop() {
   gyro_dot[pitch] = ((float) gyro_raw[x]) / GYRO_SENSITIVITY;
   gyro_dot[yaw] = ((float) gyro_raw[z]) / GYRO_SENSITIVITY;
 
-  // flip roll axis
+  // flip roll and yaw axis
   gyro_dot[roll] *= -1; // flip gyro roll axis
   gyro_dot[yaw] *= -1;  // flip gyro yaw axis
 //  gyro_dot[roll] = (gyro_dot[roll] * 0.7) + ((((float)gyro_raw[y]) / GYRO_SENSITIVITY) * 0.3);
@@ -353,10 +350,6 @@ void loop() {
     pid_controller_pitch.reset();
     pid_controller_yaw.reset();
   }
-
-  #ifdef DEBUG_ESC
-    log_string(esc_1_pulse, esc_2_pulse, esc_3_pulse, esc_4_pulse);
-  #endif
   
   /* ESC CORRECTIONS */
   // determine the maximum ESC pulse
@@ -388,6 +381,10 @@ void loop() {
     esc_3_pulse += difference;
     esc_4_pulse += difference;
   }
+
+  #ifdef DEBUG_ESC
+    log_string(esc_1_pulse, esc_2_pulse, esc_3_pulse, esc_4_pulse);
+  #endif
   
   // TODO: compensate ESC pulse for battery voltage drop & PID corrections
 
@@ -716,19 +713,11 @@ void log_string(float f1, float f2) {
 void log_string(float f1, float f2, float f3) {
   String str = String(f1);
   str += "\t";
-  str += String(f2);
-  str += "\t";
-  str += String(f3);
-  Serial.println(str);  
+  log_string(f2, f3);  
 }
 
 void log_string(float f1, float f2, float f3, float f4) {
   String str = String(f1);
   str += "\t";
-  str += String(f2);
-  str += "\t";
-  str += String(f3);
-  str += "\t";
-  str += String(f4);
-  Serial.println(str);  
+  log_string(f2, f3, f4);
 }
