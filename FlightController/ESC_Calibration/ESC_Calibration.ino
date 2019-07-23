@@ -2,7 +2,7 @@
 #include <Math.h>
 
 /* SERIAL OUTPUT DEBUG */
-//#define DEBUG_ESC
+#define DEBUG_ESC
 
 /* TEST OUTPUT CONTROL */
 const bool DISABLE_MOTORS = false;  // WARNING: if this is set to false then the motors will turn on!
@@ -14,7 +14,7 @@ const int ESC_4x_ENABLE = B11110000;
 // ESC input range
 static const int MIN_ESC_PULSE = 1000;
 // Timekeeping
-static const int REFRESH_RATE_MICROS = 4000;  // time interval (in micros) to maintain 250 Hz loop
+static const int REFRESH_RATE_MICROS = 3000;  // time interval (in micros) to maintain loop frequency
 /* GLOBALS */
 static long loop_iter = 0;
 // RX
@@ -23,7 +23,7 @@ unsigned long timer1, timer2, timer3, timer4, timer8, currentTime;   // tracks t
 unsigned int rx_roll_pulse, rx_pitch_pulse, rx_throttle_pulse, rx_yaw_pulse, rx_aux_2;   // RX input pulse
 // ESC
 unsigned int esc_1_pulse, esc_2_pulse, esc_3_pulse, esc_4_pulse;  // time duration of ESC pulses (in microsec)
-unsigned int loop_timer;  // loop timer to maintain 250Hz refresh rate
+unsigned long loop_timer;  // loop timer to maintain 250Hz refresh rate
 /* TIMEKEEPING */
 static float time_elapsed = 0.0;      // flight time elapsed
 unsigned long previous_time = 0;      // last time of loop start
@@ -50,15 +50,15 @@ void setup() {
   Serial.println("(3) Enable ESC 3");
   Serial.println("(4) Enable ESC 4");
   Serial.println("(5) Enable all ESCs");
-  esc_setting = 48; // decimal 0
+  esc_setting = 53; // decimal 5
 }
 
 void loop() {
   // HALT
-  while(loop_iter > 4000);
+//  while(loop_iter > 3000);
   
   /* MAINTAIN 250HZ LOOP FREQUENCY*/
-  while(micros() <= loop_timer + REFRESH_RATE_MICROS);
+  while(micros() <= (loop_timer + REFRESH_RATE_MICROS));
   loop_timer = micros(); 
 
   /* TIMEKEEPING */
@@ -99,7 +99,7 @@ void loop() {
   send_esc_pulse();
  
   #ifdef DEBUG_ESC
-    Serial.println(rx_throttle_pulse);  
+    if (loop_iter % 33 == 0) Serial.println(rx_throttle_pulse);  
   #endif
 
   loop_iter++;

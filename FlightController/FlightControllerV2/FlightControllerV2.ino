@@ -4,11 +4,12 @@
 #include <Math.h>
 
 /* SERIAL OUTPUT DEBUG */
-//#define DEBUG_BOOTUP
+#define DEBUG_BOOTUP
 //#define DEBUG_ACC_ANGLES
 //#define DEBUG_GYRO_ANGLES
-//#define DEBUG_ANGLES
-//#define DEBUG_RX_PULSE
+#define DEBUG_ANGLES
+//#define DEBUG_RAW_RX_PULSE
+//#define DEBUG_FILTERED_RX_PULSE
 //#define DEBUG_RX_DEG
 //#define DEBUG_PID
 //#define DEBUG_ESC
@@ -25,6 +26,8 @@
   #define PRINTLN_BOOTUP_SEQ_HEX(x)
 #endif
 
+const int PRINT_RATE = 5; // prints every PRINT_RATE loop iterations
+
 /* TEST OUTPUT CONTROL */
 const bool DISABLE_MOTORS = false;  // WARNING: if this is set to false then the motors will turn on!
 //#define PRINT_LOW_VOLTAGE_WARNING
@@ -40,7 +43,7 @@ const int ESC_4x_ENABLE = B11110000;
 static const int x = 0, y = 1, z = 2;
 static const int roll = 0, pitch = 1, yaw = 2;
 // Quadcopter settings
-static const int MAX_ANGLE_DEG = 25;
+static const int MAX_ANGLE_DEG = 15;
 static const int MAX_ANGLE_DEG_YAW = 25;
 // RX receiver
 static const int MIN_RX_THROTTLE = 1008;
@@ -53,7 +56,7 @@ static const int MIN_ESC_PULSE = 1000;
 static const int MAX_ALLOWABLE_PULSE = 1950;  // maximum pulse allowed to be outputted to any ESC
 static const int MIN_ALLOWABLE_PULSE = 1030;  // minimum pulse allowed to be outputted to any ESC when throttle is on
 // Timekeeping
-static const int REFRESH_RATE_MICROS = 4000;  // time interval (in micros) to maintain 250 Hz loop
+static const int REFRESH_RATE_MICROS = 6000;  // time interval (in micros) to maintain 166 Hz loop
 // Low voltage battery monitor
 static const float VOLTAGE_MIN = 1.9; // corresponds to 11.1 V static battery voltage
 // IMU sensitivities
@@ -80,12 +83,12 @@ static const LowPassFilter rx_yaw_lp_filter(RX_LP_FILTER_ALPHA);
 static const LowPassFilter roll_error_filter(ERROR_LP_FILTER_ALPHA);
 static const LowPassFilter pitch_error_filter(ERROR_LP_FILTER_ALPHA);
 // PID controller variables
-static const int PID_ACTIVATION_THROTTLE = 1000;  // 1200
-static const int I_TERM_ACTIVATION_THROTTLE = 1500;
-static const float P_GAIN_ROLL_PITCH = 2;  // 1.25 ; 2
-static const float D_GAIN_ROLL_PITCH = 30; // 25 ; 35
-static const float I_GAIN_ROLL_PITCH = 0;  // 0.03 ; 0.1
-static const float P_GAIN_YAW = 3;  // 2
+static const int PID_ACTIVATION_THROTTLE = 1300;  // 1200
+static const int I_TERM_ACTIVATION_THROTTLE = 1400;
+static const float P_GAIN_ROLL_PITCH = 2.5;  // 2
+static const float D_GAIN_ROLL_PITCH = 40; // 40
+static const float I_GAIN_ROLL_PITCH = 0;  // 0.01
+static const float P_GAIN_YAW = 0;  // 2
 static const float I_GAIN_YAW = 0;
 static PIDController pid_controller_roll(P_GAIN_ROLL_PITCH, I_GAIN_ROLL_PITCH, D_GAIN_ROLL_PITCH);
 static PIDController pid_controller_pitch(P_GAIN_ROLL_PITCH, I_GAIN_ROLL_PITCH, D_GAIN_ROLL_PITCH);
@@ -100,7 +103,7 @@ unsigned int rx_roll_pulse, rx_pitch_pulse, rx_throttle_pulse, rx_yaw_pulse, rx_
 unsigned int bounded_roll_pulse, bounded_pitch_pulse, bounded_yaw_pulse, bounded_throttle_pulse;
 // ESC
 unsigned int esc_1_pulse, esc_2_pulse, esc_3_pulse, esc_4_pulse;  // time duration of ESC pulses (in microsec)
-unsigned int loop_timer;  // loop timer to maintain 250Hz refresh rate
+unsigned long loop_timer;  // loop timer to maintain 250Hz refresh rate
 // IMU raw data
 static boolean IMU_found = true;
 static int16_t gyro_bias[3];   // average gyro offset in each DOF
@@ -169,9 +172,9 @@ void setup() {
 
 void loop() {
   // HALT
-  //while(loop_iter > 4000);
+//  while(loop_iter > 2500);  // 15s
   
-  /* MAINTAIN 250HZ LOOP FREQUENCY*/
+  /* MAINTAIN 166 Hz LOOP FREQUENCY*/
   while(micros() <= loop_timer + REFRESH_RATE_MICROS);
   loop_timer = micros(); 
 
@@ -195,17 +198,16 @@ void loop() {
   }
 
   /* TIMEKEEPING */
-  current_time = millis();
+  current_time = micros();
   if(loop_iter > 0) {  // if not first loop iteration
-    delta_t = (current_time - previous_time) * 1E-3;   // calculate time passed in seconds
+    delta_t = ((float) (current_time - previous_time)) * 1E-6;   // calculate time passed in seconds
   } 
-  
   time_elapsed += delta_t;
   previous_time = current_time;
-  
+
   /* READ IMU REGISTERS */
   getIMURegisterData();
-
+  
   /* GYRO CALCULATIONS */
   // convert from 16-bit integer to angular velocity in deg/s
   gyro_dot[roll] = ((float) gyro_raw[y]) / GYRO_SENSITIVITY;
@@ -215,9 +217,6 @@ void loop() {
   // flip roll and yaw axis
   gyro_dot[roll] *= -1; // flip gyro roll axis
   gyro_dot[yaw] *= -1;  // flip gyro yaw axis
-//  gyro_dot[roll] = (gyro_dot[roll] * 0.7) + ((((float)gyro_raw[y]) / GYRO_SENSITIVITY) * 0.3);
-//  gyro_dot[pitch] = (gyro_dot[pitch] * 0.7) + ((((float)gyro_raw[x]) / GYRO_SENSITIVITY) * 0.3);
-//  gyro_dot[yaw] = (gyro_dot[yaw] * 0.7) + ((((float)gyro_raw[z]) / GYRO_SENSITIVITY) * 0.3);
 
   // integrate to obtain roll, pitch, and yaw values
   gyro[roll] += gyro_dot[roll] * delta_t;
@@ -256,8 +255,8 @@ void loop() {
   /* GYRO/ACC FUSION CALCULATION */
   if(startingGyroAnglesSet) {
     // use complementary filter to fuse sensor readings
-    imu_deg[roll] = COMP_FILTER_ALPHA*(imu_deg[roll]+gyro_dot[roll]*delta_t) + (1-COMP_FILTER_ALPHA)*acc[roll]; 
-    imu_deg[pitch] = COMP_FILTER_ALPHA*(imu_deg[pitch]+(gyro_dot[pitch]*delta_t)) + (1-COMP_FILTER_ALPHA)*acc[pitch];   
+    imu_deg[roll] = COMP_FILTER_ALPHA*(imu_deg[roll] + (gyro_dot[roll] * delta_t)) + (1-COMP_FILTER_ALPHA)*acc[roll]; 
+    imu_deg[pitch] = COMP_FILTER_ALPHA*(imu_deg[pitch] + (gyro_dot[pitch] * delta_t)) + (1-COMP_FILTER_ALPHA)*acc[pitch];   
     imu_deg[yaw] = gyro[yaw];
   } else {
     // accomodate for any starting angular offset due to unlevel surface
@@ -274,18 +273,18 @@ void loop() {
 //  imu_deg[pitch] += temp_roll * sin(imu_deg[yaw] * DEG_TO_RAD);
 
   #ifdef DEBUG_ACC_ANGLES
-    log_string(acc[roll], acc[pitch], acc[yaw]);
+    if (loop_iter % PRINT_RATE == 0)  log_string(acc[roll], acc[pitch], acc[yaw]);
   #endif
 
   #ifdef DEBUG_GYRO_ANGLES
-    log_string(gyro[roll], gyro[pitch], gyro[yaw]);
+    if (loop_iter % PRINT_RATE == 0)  log_string(gyro[roll], gyro[pitch], gyro[yaw]);
   #endif
 
   #ifdef DEBUG_ANGLES
-    log_string(imu_deg[roll], imu_deg[pitch], imu_deg[yaw]);
+    if (loop_iter % PRINT_RATE == 0)  log_string(imu_deg[roll], imu_deg[pitch], imu_deg[yaw]);
   #endif
 
-  // limit RX inputs
+  // cutoff RX inputs at upper and lower bound
   bounded_throttle_pulse = restrict_pulse_range(rx_throttle_pulse, MIN_RX_THROTTLE, MAX_RX_THROTTLE);
   bounded_roll_pulse = restrict_pulse_range(rx_roll_pulse, MIN_RX_ANGLE_PULSE, MAX_RX_ANGLE_PULSE);
   bounded_pitch_pulse = restrict_pulse_range(rx_pitch_pulse, MIN_RX_ANGLE_PULSE, MAX_RX_ANGLE_PULSE);
@@ -297,8 +296,12 @@ void loop() {
   bounded_pitch_pulse = rx_pitch_lp_filter.output(bounded_pitch_pulse);
   bounded_yaw_pulse = rx_yaw_lp_filter.output(bounded_yaw_pulse);
 
-  #ifdef DEBUG_RX_PULSE
-    log_string(bounded_throttle_pulse, bounded_roll_pulse, bounded_pitch_pulse, bounded_yaw_pulse);
+  #ifdef DEBUG_RAW_RX_PULSE
+    if (loop_iter % PRINT_RATE == 0)  log_string(rx_throttle_pulse, rx_roll_pulse, rx_pitch_pulse, rx_yaw_pulse);
+  #endif
+
+  #ifdef DEBUG_FILTERED_RX_PULSE
+    if (loop_iter % PRINT_RATE == 0)  log_string(bounded_throttle_pulse, bounded_roll_pulse, bounded_pitch_pulse, bounded_yaw_pulse);
   #endif
 
   // convert rx angle inputs from microseconds to degrees
@@ -307,40 +310,37 @@ void loop() {
   const float rx_yaw_deg = theta_pulse_to_deg(bounded_yaw_pulse, MIN_RX_ANGLE_PULSE, MAX_RX_ANGLE_PULSE, -MAX_ANGLE_DEG_YAW, MAX_ANGLE_DEG_YAW);
 
   #ifdef DEBUG_RX_DEG
-    log_string(rx_roll_deg, rx_pitch_deg, rx_yaw_deg);
+    if (loop_iter % PRINT_RATE == 0)  log_string(rx_roll_deg, rx_pitch_deg, rx_yaw_deg);
   #endif
-
+  
   float roll_error = imu_deg[roll] - rx_roll_deg;
   float pitch_error = imu_deg[pitch] - rx_pitch_deg;
   float yaw_error = imu_deg[yaw] - rx_yaw_deg;
 
   roll_error = roll_error_filter.output(roll_error);
   pitch_error = pitch_error_filter.output(pitch_error);
-  
-  /* PID CALCULATIONS */  
 
-  // prevent I term from growing at low throttle
-  const bool disable_i = rx_throttle_pulse < I_TERM_ACTIVATION_THROTTLE;
+  /* PID CALCULATIONS */  
+  bool disable_i = bounded_throttle_pulse < I_TERM_ACTIVATION_THROTTLE;
   pid_controller_roll.disable_i_term(disable_i);
   pid_controller_pitch.disable_i_term(disable_i);
   pid_controller_yaw.disable_i_term(disable_i);
-    
   const float roll_pid = pid_controller_roll.calculate_output(roll_error);
   const float pitch_pid = pid_controller_pitch.calculate_output(pitch_error);
   const float yaw_pid = pid_controller_yaw.calculate_output(yaw_error);
-
+  
   #ifdef DEBUG_PID
-    log_string(roll_pid, pitch_pid, yaw_pid);
+    if (loop_iter % PRINT_RATE == 0)  log_string(roll_pid, pitch_pid, yaw_pid);
   #endif
 
   /* SEND ESC SIGNALS */
   // set esc input pulse to the throttle pulse from RX
   // activate PID when motors are spinning above a certain threshold
   if(rx_throttle_pulse > PID_ACTIVATION_THROTTLE) {
-    esc_1_pulse = bounded_throttle_pulse - roll_pid - pitch_pid - yaw_pid; // - roll, - pitch, - yaw
-    esc_2_pulse = bounded_throttle_pulse - roll_pid + pitch_pid + yaw_pid; // - roll, + pitch, + yaw
-    esc_3_pulse = bounded_throttle_pulse + roll_pid + pitch_pid - yaw_pid; // + roll, + pitch, - yaw
-    esc_4_pulse = bounded_throttle_pulse + roll_pid - pitch_pid + yaw_pid; // + roll, - pitch, + yaw
+    esc_1_pulse = bounded_throttle_pulse - roll_pid; // - pitch_pid - yaw_pid; // - roll, - pitch, - yaw
+    esc_2_pulse = bounded_throttle_pulse - roll_pid; // + pitch_pid + yaw_pid; // - roll, + pitch, + yaw
+    esc_3_pulse = bounded_throttle_pulse + roll_pid; // + pitch_pid - yaw_pid; // + roll, + pitch, - yaw
+    esc_4_pulse = bounded_throttle_pulse + roll_pid; // - pitch_pid + yaw_pid; // + roll, - pitch, + yaw
   } else {
     esc_1_pulse = bounded_throttle_pulse;
     esc_2_pulse = bounded_throttle_pulse;
@@ -383,18 +383,17 @@ void loop() {
   }
 
   #ifdef DEBUG_ESC
-    log_string(esc_1_pulse, esc_2_pulse, esc_3_pulse, esc_4_pulse);
+    if (loop_iter % PRINT_RATE == 0)  log_string(esc_1_pulse, esc_2_pulse, esc_3_pulse, esc_4_pulse);
   #endif
   
   // TODO: compensate ESC pulse for battery voltage drop & PID corrections
-
+  
   // if user is not throttling, then cut off motor power
   if(rx_throttle_pulse < MIN_ALLOWABLE_PULSE || DISABLE_MOTORS) {
     send_minimum_esc_pulse();
   } else {
     send_esc_pulse();
   }
-
   loop_iter++;
 }
 
@@ -713,11 +712,13 @@ void log_string(float f1, float f2) {
 void log_string(float f1, float f2, float f3) {
   String str = String(f1);
   str += "\t";
+  Serial.print(str);
   log_string(f2, f3);  
 }
 
 void log_string(float f1, float f2, float f3, float f4) {
   String str = String(f1);
   str += "\t";
+  Serial.print(str);
   log_string(f2, f3, f4);
 }

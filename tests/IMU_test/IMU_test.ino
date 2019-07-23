@@ -41,7 +41,7 @@ const float millis_to_seconds = 1E-3;   // convert milliseconds to seconds
 static boolean startingGyroAnglesSet = false;
 
 void setup() {
-  Serial.begin(9600);
+  Serial.begin(115200);
   Wire.begin();             // initiate Wire library
   scanI2CDevices();         // identify all connected devices that use I2C  
   initializeIMU();          // power up, set sensitivities, and calculate gyro offset
@@ -70,8 +70,6 @@ void loop() {
   angularVelocities[PITCH] = ((float) gyro[X]) / GYRO_SENSITIVITY;
   angularVelocities[YAW] = ((float) gyro[Z]) / GYRO_SENSITIVITY;
 
-  
-
 //  if(angularVelocities[ROLL] < 0.5 && angularVelocities[ROLL] > -0.5) {
 //    angularVelocities[ROLL] = 0.0;
 //  }
@@ -83,13 +81,14 @@ void loop() {
 //  }
 
   // integrate to obtain roll, pitch, and yaw values
-  gyroAngles[ROLL] += angularVelocities[ROLL] * delta_t;
-  gyroAngles[PITCH] += angularVelocities[PITCH] * delta_t;
-  gyroAngles[YAW] += angularVelocities[YAW] * delta_t;
+  angles[ROLL] += angularVelocities[ROLL] * delta_t;
+  angles[PITCH] += angularVelocities[PITCH] * delta_t;
+  angles[YAW] += angularVelocities[YAW] * delta_t;
 
-  // TODO:
-  // gyro_roll -= angle_pitch * sin(gyro_z * delta_t_to_int * deg_to_rad)
-  // gyro_pitch += angle_roll * sin(gyro_z * delta_t_to_int * deg_to_rad)
+  // accomodate for yaw
+  const double tempR = angles[ROLL];
+  angles[ROLL] -= angles[PITCH] * sin(angularVelocities[YAW] * delta_t * 0.01744);
+  angles[PITCH] += angles[ROLL] * sin(angularVelocities[YAW] * delta_t * 0.01744);
 
   /*
   * PERFORM CALCULATIONS FROM ACCEL 
@@ -102,40 +101,39 @@ void loop() {
   const float acc_ROLL_radians = atan2(-accX_g, sqrt((accY_g*accY_g) + (accZ_g*accZ_g)));
   
   accAngles[ROLL] = acc_ROLL_radians * RAD_TO_DEG;
-  accAngles[PITCH] = acc_PITCH_radians * RAD_TO_DEG;  
+  accAngles[PITCH] = acc_PITCH_radians * RAD_TO_DEG; 
 
-  accAngles[ROLL] -= 1.5;
-  accAngles[PITCH] -= 1.9;
-  
+  accAngles[ROLL] -= 2.3;
+  accAngles[PITCH] -= 2.0;
+      
   /*
   * PERFORM FUSION CALCULATION 
   */
   if(startingGyroAnglesSet) {
     // use complementary filter to fuse readings
-    angles[ROLL] = 0.9*(angles[ROLL]+(angularVelocities[ROLL]*delta_t)) + (0.1*accAngles[ROLL]); 
-    angles[PITCH] = 0.9*(angles[PITCH]+(angularVelocities[PITCH]*delta_t)) + (0.1*accAngles[PITCH]); 
+    angles[ROLL] = (0.999*angles[ROLL]) + (0.001*accAngles[ROLL]); 
+    angles[PITCH] = (0.999*angles[PITCH]) + (0.001*accAngles[PITCH]); 
   } else {
     // accomodate for any starting angular offset due to unlevel surface
-    gyroAngles[ROLL] = accAngles[ROLL];
-    gyroAngles[PITCH] = accAngles[PITCH];
-    angles[ROLL] = gyroAngles[ROLL];
-    angles[PITCH] = gyroAngles[PITCH];
+    angles[ROLL] = accAngles[ROLL];
+    angles[PITCH] = accAngles[PITCH];
     startingGyroAnglesSet = true;
   }
 
-  angles[YAW] = gyroAngles[YAW];
+  plot3Angles(angles[ROLL], angles[PITCH], angles[YAW]);
+
 
   /*
    * PRINT OUTPUT
    */
   //plotAngles();
   //Serial.print(timeElapsed);  Serial.print("\t");
-  //plot3Angles(accAngles[ROLL], accAngles[PITCH], accAngles[YAW]);
-  //plot3Angles(gyroAngles[ROLL], gyroAngles[PITCH], gyroAngles[YAW]);
-  //plot3Angles(angularVelocities[ROLL], angularVelocities[PITCH], angularVelocities[YAW]);
-  //plot3Angles(gyro[ROLL], gyro[PITCH], gyro[YAW]);
-  plot3Angles(angles[ROLL], angles[PITCH], angles[YAW]);
-  //plot2Angles(angles[ROLL], angles[PITCH]);
+//  plot3Angles(accAngles[ROLL], accAngles[PITCH], accAngles[YAW]);
+//  plot3Angles(gyroAngles[ROLL], gyroAngles[PITCH], gyroAngles[YAW]);
+//  plot3Angles(angularVelocities[ROLL], angularVelocities[PITCH], angularVelocities[YAW]);
+//  plot3Angles(gyro[ROLL], gyro[PITCH], gyro[YAW]);
+//  plot3Angles(angles[ROLL], angles[PITCH], angles[YAW]);
+//  plot2Angles(angles[ROLL], angles[PITCH]);
   previous_time = current_time;
   delay(50); 
 }
