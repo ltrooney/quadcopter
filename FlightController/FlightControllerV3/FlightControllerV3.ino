@@ -82,17 +82,24 @@ static const LowPassFilter rx_pitch_lp_filter(RX_LP_FILTER_ALPHA);
 static const LowPassFilter rx_yaw_lp_filter(RX_LP_FILTER_ALPHA);
 static const LowPassFilter roll_error_filter(ERROR_LP_FILTER_ALPHA);
 static const LowPassFilter pitch_error_filter(ERROR_LP_FILTER_ALPHA);
+
 // PID controller variables
 static const int PID_ACTIVATION_THROTTLE = 1300;  // 1200
 static const int I_TERM_ACTIVATION_THROTTLE = 1400;
-static const float P_GAIN_ROLL_PITCH = 2.5;  // 2
-static const float D_GAIN_ROLL_PITCH = 120; // 40
-static const float I_GAIN_ROLL_PITCH = 0;  // 0.01
-static const float P_GAIN_YAW = 0;  // 2
-static const float I_GAIN_YAW = 0;
-static PIDController pid_controller_roll(P_GAIN_ROLL_PITCH, I_GAIN_ROLL_PITCH, D_GAIN_ROLL_PITCH);
-static PIDController pid_controller_pitch(P_GAIN_ROLL_PITCH, I_GAIN_ROLL_PITCH, D_GAIN_ROLL_PITCH);
-static PIDController pid_controller_yaw(P_GAIN_YAW, I_GAIN_YAW, 0);
+//static const float P_GAIN_ROLL_PITCH = 2.5;  // 2
+//static const float D_GAIN_ROLL_PITCH = 120; // 40
+//static const float I_GAIN_ROLL_PITCH = 0;  // 0.01
+//static const float P_GAIN_YAW = 0;  // 2
+//static const float I_GAIN_YAW = 0;
+//static PIDController pid_controller_roll(P_GAIN_ROLL_PITCH, I_GAIN_ROLL_PITCH, D_GAIN_ROLL_PITCH);
+//static PIDController pid_controller_pitch(P_GAIN_ROLL_PITCH, I_GAIN_ROLL_PITCH, D_GAIN_ROLL_PITCH);
+//static PIDController pid_controller_yaw(P_GAIN_YAW, I_GAIN_YAW, 0);
+
+static float i_angle_output[3], i_rate_output[3];
+static float error_prior_angle[3], error_prior_rate[3];
+static const float i_thresh = 100;
+static float max_output = 300;
+static float pid_output[3];
 
 /* GLOBALS */
 static long loop_iter = 0;
@@ -101,6 +108,7 @@ byte lastChannel1, lastChannel2, lastChannel3, lastChannel4, lastChannel8; // de
 unsigned long timer1, timer2, timer3, timer4, timer8, currentTime;   // tracks time of rising RX pulse
 unsigned int rx_roll_pulse, rx_pitch_pulse, rx_throttle_pulse, rx_yaw_pulse, rx_aux_2;   // RX input pulse
 unsigned int bounded_roll_pulse, bounded_pitch_pulse, bounded_yaw_pulse, bounded_throttle_pulse;
+static float rx_deg[3];
 // ESC
 unsigned int esc_1_pulse, esc_2_pulse, esc_3_pulse, esc_4_pulse;  // time duration of ESC pulses (in microsec)
 unsigned long loop_timer;  // loop timer to maintain 250Hz refresh rate
@@ -316,50 +324,47 @@ void loop() {
   #endif
 
   // convert rx angle inputs from microseconds to degrees
-  const float rx_roll_deg = theta_pulse_to_deg(bounded_roll_pulse, MIN_RX_ANGLE_PULSE, MAX_RX_ANGLE_PULSE, -MAX_ANGLE_DEG, MAX_ANGLE_DEG);
-  const float rx_pitch_deg = theta_pulse_to_deg(bounded_pitch_pulse, MIN_RX_ANGLE_PULSE, MAX_RX_ANGLE_PULSE, -MAX_ANGLE_DEG, MAX_ANGLE_DEG);
-  const float rx_yaw_deg = theta_pulse_to_deg(bounded_yaw_pulse, MIN_RX_ANGLE_PULSE, MAX_RX_ANGLE_PULSE, -MAX_ANGLE_DEG_YAW, MAX_ANGLE_DEG_YAW);
+  rx_deg[roll] = theta_pulse_to_deg(bounded_roll_pulse, MIN_RX_ANGLE_PULSE, MAX_RX_ANGLE_PULSE, -MAX_ANGLE_DEG, MAX_ANGLE_DEG);
+  rx_deg[pitch] = theta_pulse_to_deg(bounded_pitch_pulse, MIN_RX_ANGLE_PULSE, MAX_RX_ANGLE_PULSE, -MAX_ANGLE_DEG, MAX_ANGLE_DEG);
+  rx_deg[yaw] = theta_pulse_to_deg(bounded_yaw_pulse, MIN_RX_ANGLE_PULSE, MAX_RX_ANGLE_PULSE, -MAX_ANGLE_DEG_YAW, MAX_ANGLE_DEG_YAW);
 
   #ifdef DEBUG_RX_DEG
-    if (loop_iter % PRINT_RATE == 0)  log_string(rx_roll_deg, rx_pitch_deg, rx_yaw_deg);
+    if (loop_iter % PRINT_RATE == 0)  log_string(rx_deg[roll], rx_deg[pitch], rx_deg[yaw]);
   #endif
   
-  float roll_error = imu_deg[roll] - rx_roll_deg;
-  float pitch_error = imu_deg[pitch] - rx_pitch_deg;
-  float yaw_error = imu_deg[yaw] - rx_yaw_deg;
-
-  roll_error = roll_error_filter.output(roll_error);
-  pitch_error = pitch_error_filter.output(pitch_error);
+//  float roll_error = imu_deg[roll] - rx_deg[roll];
+//  float pitch_error = imu_deg[pitch] - rx_deg[pitch];
+//  float yaw_error = imu_deg[yaw] - rx_deg[yaw];
+//
+//  roll_error = roll_error_filter.output(roll_error);
+//  pitch_error = pitch_error_filter.output(pitch_error);
 
   /* PID CALCULATIONS */  
-  bool disable_i = bounded_throttle_pulse < I_TERM_ACTIVATION_THROTTLE;
-  pid_controller_roll.disable_i_term(disable_i);
-  pid_controller_pitch.disable_i_term(disable_i);
-  pid_controller_yaw.disable_i_term(disable_i);
-  const float roll_pid = pid_controller_roll.calculate_output(roll_error);
-  const float pitch_pid = pid_controller_pitch.calculate_output(pitch_error);
-  const float yaw_pid = pid_controller_yaw.calculate_output(yaw_error);
+//  bool disable_i = bounded_throttle_pulse < I_TERM_ACTIVATION_THROTTLE;
+//  const float roll_pid = pid_controller(imu_deg[roll], rx_deg[roll], P_GAIN_ROLL_PITCH, I_GAIN_ROLL_PITCH, D_GAIN_ROLL_PITCH, roll);
+//  const float pitch_pid = pid_controller(imu_deg[pitch], rx_deg[pitch], P_GAIN_ROLL_PITCH, I_GAIN_ROLL_PITCH, D_GAIN_ROLL_PITCH, pitch);
+//  const float yaw_pid = pid_controller(imu_deg[yaw], rx_deg[yaw], P_GAIN_YAW, I_GAIN_YAW, 0, yaw);
+
+  calculate_pid(rx_deg);
   
   #ifdef DEBUG_PID
-    if (loop_iter % PRINT_RATE == 0)  log_string(roll_pid, pitch_pid, yaw_pid);
+    if (loop_iter % PRINT_RATE == 0)  log_string(pid_output[roll], pid_output[pitch], pid_output[yaw]);
   #endif
 
   /* SEND ESC SIGNALS */
   // set esc input pulse to the throttle pulse from RX
   // activate PID when motors are spinning above a certain threshold
   if(rx_throttle_pulse > PID_ACTIVATION_THROTTLE) {
-    esc_1_pulse = bounded_throttle_pulse - roll_pid; // - pitch_pid - yaw_pid; // - roll, - pitch, - yaw
-    esc_2_pulse = bounded_throttle_pulse - roll_pid; // + pitch_pid + yaw_pid; // - roll, + pitch, + yaw
-    esc_3_pulse = bounded_throttle_pulse + roll_pid; // + pitch_pid - yaw_pid; // + roll, + pitch, - yaw
-    esc_4_pulse = bounded_throttle_pulse + roll_pid; // - pitch_pid + yaw_pid; // + roll, - pitch, + yaw
+    esc_1_pulse = bounded_throttle_pulse - pid_output[roll]; // - pid_output[pitch] - pid_output[yaw]; // - roll, - pitch, - yaw
+    esc_2_pulse = bounded_throttle_pulse - pid_output[roll]; // + pid_output[pitch] + pid_output[yaw]; // - roll, + pitch, + yaw
+    esc_3_pulse = bounded_throttle_pulse + pid_output[roll]; // + pid_output[pitch] - pid_output[yaw]; // + roll, + pitch, - yaw
+    esc_4_pulse = bounded_throttle_pulse + pid_output[roll]; // - pid_output[pitch] + pid_output[yaw]; // + roll, - pitch, + yaw
   } else {
     esc_1_pulse = bounded_throttle_pulse;
     esc_2_pulse = bounded_throttle_pulse;
     esc_3_pulse = bounded_throttle_pulse;
     esc_4_pulse = bounded_throttle_pulse;
-    pid_controller_roll.reset();
-    pid_controller_pitch.reset();
-    pid_controller_yaw.reset();
+    reset_pid_controllers();
   }
   
   /* ESC CORRECTIONS */
@@ -407,17 +412,103 @@ void loop() {
   }
   loop_iter++;
 
-  log_string(imu_deg[roll], rx_roll_deg);
+  log_string(imu_deg[roll], rx_deg[roll]);
 }
 
 /*  END LOOP  */
+float angle_controller(const float input, const float setpoint, const float p_gain, const float i_gain, const float d_gain, const int axis) {
+  float error = input - setpoint;
+  return pid(p_gain, i_gain, d_gain, error, &error_prior_angle[axis], &i_angle_output[axis]);
+}
+
+float rate_controller(const float input, const float setpoint, const float p_gain, const float i_gain, const float d_gain, const int axis) {
+  float error = input - setpoint;
+  return pid(p_gain, i_gain, d_gain, error, &error_prior_rate[axis], &i_rate_output[axis]);
+}
+
+float pid(const float p_gain, const float i_gain, const float d_gain, const float error, float* error_prior, float* i_output) {
+  if(bounded_throttle_pulse > I_TERM_ACTIVATION_THROTTLE) {
+    *i_output += i_gain * error;
+  } else {
+    *i_output = 0;
+  }
+    
+  // anti-windup; prevent I term from getting too big
+  if(*i_output > i_thresh) *i_output = i_thresh;
+  else if(*i_output < -i_thresh) *i_output = -i_thresh;
+  
+  *error_prior = error;
+  
+  // combine output
+  float output = (p_gain * error) + (*i_output) + (d_gain * (error - *error_prior));
+  
+  if(output > max_output) output = max_output;
+  else if(output < -max_output) output = -max_output;
+  
+  return output;
+}
+
+// angle controller gains
+const float P_GAIN_ROLL_PITCH_ANGLE = 0;
+const float I_GAIN_ROLL_PITCH_ANGLE = 0;
+const float D_GAIN_ROLL_PITCH_ANGLE = 0;
+const float P_GAIN_YAW_ANGLE = 0;
+const float I_GAIN_YAW_ANGLE = 0;
+// rate controller gains
+const float P_GAIN_ROLL_PITCH_RATE = 0;
+const float I_GAIN_ROLL_PITCH_RATE = 0;
+const float D_GAIN_ROLL_PITCH_RATE = 0;
+const float P_GAIN_YAW_RATE = 0;
+const float I_GAIN_YAW_RATE = 0;
+
+float calculate_pid(float rx_deg[]) {
+  // Angle Controller
+  // ----------------
+  // input: imu_deg (deg)
+  // setpoint: rx_deg (deg)
+  float roll_angle_pid = angle_controller(imu_deg[roll], rx_deg[roll], P_GAIN_ROLL_PITCH_ANGLE, I_GAIN_ROLL_PITCH_ANGLE, D_GAIN_ROLL_PITCH_ANGLE, roll);
+  float pitch_angle_pid = angle_controller(imu_deg[pitch], rx_deg[pitch], P_GAIN_ROLL_PITCH_ANGLE, I_GAIN_ROLL_PITCH_ANGLE, D_GAIN_ROLL_PITCH_ANGLE, pitch);
+  float yaw_angle_pid = angle_controller(imu_deg[yaw], rx_deg[yaw], P_GAIN_YAW_ANGLE, I_GAIN_YAW_ANGLE, 0, yaw);
+  
+  // Rate Controller
+  // ----------------
+  // input: gyro_dot (deg/s)
+  // setpoint: output from angle controller (deg/s)
+//  float roll_rate_pid = angle_controller(gyro_dot[roll], roll_angle_pid, P_GAIN_ROLL_PITCH, I_GAIN_ROLL_PITCH, D_GAIN_ROLL_PITCH, roll);
+  float roll_rate_pid = rate_controller(gyro_dot[roll], 0, P_GAIN_ROLL_PITCH_RATE, I_GAIN_ROLL_PITCH_RATE, D_GAIN_ROLL_PITCH_RATE, roll);
+  float pitch_rate_pid = rate_controller(gyro_dot[pitch], 0, P_GAIN_ROLL_PITCH_RATE, I_GAIN_ROLL_PITCH_RATE, D_GAIN_ROLL_PITCH_RATE, pitch);
+  float yaw_rate_pid = rate_controller(gyro_dot[yaw], 0, P_GAIN_YAW_RATE, I_GAIN_YAW_RATE, 0, yaw);
+
+  pid_output[roll] = roll_rate_pid;
+  pid_output[pitch] = pitch_rate_pid;
+  pid_output[yaw] = yaw_rate_pid;
+}
+
+  
+void reset_pid_controllers() {
+  pid_output[roll] = 0;  
+  pid_output[pitch] = 0; 
+  pid_output[yaw] = 0; 
+  i_angle_output[roll] = 0;  
+  i_angle_output[pitch] = 0; 
+  i_angle_output[yaw] = 0;
+  i_rate_output[roll] = 0;  
+  i_rate_output[pitch] = 0; 
+  i_rate_output[yaw] = 0;
+  error_prior_angle[roll] = 0;
+  error_prior_angle[pitch] = 0;
+  error_prior_angle[yaw] = 0;
+  error_prior_rate[roll] = 0;
+  error_prior_rate[pitch] = 0;
+  error_prior_rate[yaw] = 0;
+}
 
 // sends pulse to esc with the values of esc_1_pulse, esc_2_pulse, esc_3_pulse, and esc_4_pulse
 void send_esc_pulse() {  
   unsigned long offset_timer = micros();  // remember the current time
   PORTD |= ESC_4x_ENABLE;   // set digital pins 4-7 to HIGH
   /* 
-   * HERE THERE IS A 1000us-2000us gap of time, this is where to perform other calculations 
+   * HERE THERE IS A 1000us-2000us gap of time
    */
   unsigned long timer_esc_1 = esc_1_pulse + offset_timer; // time that esc 1 pulse should finish
   unsigned long timer_esc_2 = esc_2_pulse + offset_timer; // time that esc 2 pulse should finish

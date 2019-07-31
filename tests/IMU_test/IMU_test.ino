@@ -86,7 +86,6 @@ void loop() {
   angles[YAW] += angularVelocities[YAW] * delta_t;
 
   // accomodate for yaw
-  const double tempR = angles[ROLL];
   angles[ROLL] -= angles[PITCH] * sin(angularVelocities[YAW] * delta_t * 0.01744);
   angles[PITCH] += angles[ROLL] * sin(angularVelocities[YAW] * delta_t * 0.01744);
 
