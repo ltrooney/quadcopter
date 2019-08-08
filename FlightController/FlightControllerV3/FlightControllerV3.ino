@@ -43,7 +43,7 @@ const int ESC_4x_ENABLE = B11110000;
 static const int x = 0, y = 1, z = 2;
 static const int roll = 0, pitch = 1, yaw = 2;
 // Quadcopter settings
-static const int MAX_ANGLE_DEG = 7;
+static const int MAX_ANGLE_DEG = 10;
 static const int MAX_ANGLE_DEG_YAW = 25;
 // RX receiver
 static const int MIN_RX_THROTTLE = 1008;
@@ -58,7 +58,7 @@ static const int MIN_ALLOWABLE_PULSE = 1030;  // minimum pulse allowed to be out
 // Timekeeping
 static const int REFRESH_RATE_MICROS = 6000;  // time interval (in micros) to maintain 166 Hz loop
 // Low voltage battery monitor
-static const float VOLTAGE_MIN = 1.9; // corresponds to 11.1 V static battery voltage
+static const float VOLTAGE_MIN = 1.9; // corresponds to 11.1 V battery voltage
 // IMU sensitivities
 static const float GYRO_SENSITIVITY = 65.5;     // +- 500 deg/s gyroscope sensitivity
 static const float ACC_SENSITIVITY = 4096;    // +- 8g accelerometer sensitivity
@@ -69,11 +69,12 @@ static const int ACCEL_XOUT_H = 0x3B;   // first accelerometer data register
 static const int GYRO_XOUT_H  = 0x43;   // first gyroscope data register
 static const int GYRO_CONFIG  = 0x1B;   // gyroscope configuration register
 // filter coefficients
-static const float COMP_FILTER_ALPHA = 0.98;
-static const float ACC_LP_FILTER_ALPHA = 0.08;
+static const float COMP_FILTER_ALPHA = 0.996;
+static const float ACC_LP_FILTER_ALPHA = 0.15;
 static const float RX_LP_FILTER_ALPHA = 0.15;
 static const float ERROR_LP_FILTER_ALPHA = 0.18;
-static const float LP_MED_COMBO_FILTER_ALPHA = 0.9;
+static const float GYRO_LP_FILTER_ALPHA = 0.15;
+
 static const LowPassFilter acc_roll_lp_filter(ACC_LP_FILTER_ALPHA);
 static const LowPassFilter acc_pitch_lp_filter(ACC_LP_FILTER_ALPHA);
 static const LowPassFilter rx_throttle_lp_filter(RX_LP_FILTER_ALPHA);
@@ -82,6 +83,8 @@ static const LowPassFilter rx_pitch_lp_filter(RX_LP_FILTER_ALPHA);
 static const LowPassFilter rx_yaw_lp_filter(RX_LP_FILTER_ALPHA);
 static const LowPassFilter roll_error_filter(ERROR_LP_FILTER_ALPHA);
 static const LowPassFilter pitch_error_filter(ERROR_LP_FILTER_ALPHA);
+static const LowPassFilter gyro_rate_filter(GYRO_LP_FILTER_ALPHA);
+
 
 // PID controller variables
 static const int PID_ACTIVATION_THROTTLE = 1300;  // 1200
@@ -121,16 +124,14 @@ static int16_t acc_raw[3];         // converted values
 // IMU calculated data
 static float gyro[3];     // angles derived from gyro readings
 static float gyro_dot[3]; // angular velocities derived from gyro readings
+static float gyro_dot_lp[3]; // filtered gyro angular velocity for pid input
 static float acc_in_g[3]; // acc values converted to units of G's
 static float acc_radians[2];  // acc vals in radians
 static float acc[2];      // angles derived from acc readings
 static float imu_deg[3];  // angles derived from gyro/acc fusion
 static boolean startingGyroAnglesSet = false;
 // filter input/output
-static const int ACC_BUFF_SIZE = 3;
-static float acc_roll_buffer[ACC_BUFF_SIZE], acc_pitch_buffer[ACC_BUFF_SIZE];   // queue that keeps track of latest 3 readings from accelerometer
-static float low_pass[2];
-static float low_pass_prior[2];
+static float acc_roll_buffer[3], acc_pitch_buffer[3];   // queue that keeps track of latest 3 readings from accelerometer
 static float median_pass[2];
 
 /* TIMEKEEPING */
@@ -226,17 +227,22 @@ void loop() {
   gyro_dot[roll] *= -1; // flip gyro roll axis
   gyro_dot[yaw] *= -1;  // flip gyro yaw axis
 
-  gyro[roll] += gyro_dot[roll] * delta_t;
-  gyro[pitch] += gyro_dot[pitch] * delta_t;
-  gyro[yaw] += gyro_dot[yaw] * delta_t;
+  // low pass filter
+  gyro_dot_lp[roll] = (0.9 * gyro_dot_lp[roll]) + (0.1 * gyro_dot[roll]);
+  gyro_dot_lp[pitch] = (0.9 * gyro_dot_lp[pitch]) + (0.1 * gyro_dot[pitch]);
+  gyro_dot_lp[yaw] = (0.9 * gyro_dot_lp[yaw]) + (0.1 * gyro_dot[yaw]);
+
+  gyro[roll] += gyro_dot_lp[roll] * delta_t;
+  gyro[pitch] += gyro_dot_lp[pitch] * delta_t;
+  gyro[yaw] += gyro_dot_lp[yaw] * delta_t;
 
   // integrate to obtain roll, pitch, and yaw values
-  imu_deg[roll] += gyro_dot[roll] * delta_t;
-  imu_deg[pitch] += gyro_dot[pitch] * delta_t;
-  imu_deg[yaw] += gyro_dot[yaw] * delta_t;
+  imu_deg[roll] += gyro_dot_lp[roll] * delta_t;
+  imu_deg[pitch] += gyro_dot_lp[pitch] * delta_t;
+  imu_deg[yaw] += gyro_dot_lp[yaw] * delta_t;
 
   // accomodate for yaw movement
-  const double sine_of_yaw = sin(gyro_dot[yaw] * delta_t * 0.01744);
+  const double sine_of_yaw = sin(gyro_dot_lp[yaw] * delta_t * 0.01744);
   gyro[roll] -= gyro[pitch] * sine_of_yaw;
   gyro[pitch] += gyro[roll] * sine_of_yaw;
   imu_deg[roll] -= imu_deg[pitch] * sine_of_yaw;
@@ -256,21 +262,22 @@ void loop() {
   acc[roll]  += 2.2; 
   acc[pitch] -= 1.4;  // previously 3 at steady state
 
+  log_string(time_elapsed, gyro_dot[roll], acc[roll]);
+
   // add current accelerometer readings to buffer
-  enqueue(acc_roll_buffer, ACC_BUFF_SIZE, acc[roll]);  
-  enqueue(acc_pitch_buffer, ACC_BUFF_SIZE, acc[pitch]);
+  enqueue(acc_roll_buffer, 3, acc[roll]);  
+  enqueue(acc_pitch_buffer, 3, acc[pitch]);
 
   // apply low-pass & median filter to accelerometer data
   if(loop_iter > 1){
     median(acc_roll_buffer[0], acc_roll_buffer[1], acc_roll_buffer[2], median_pass[roll]);
     median(acc_pitch_buffer[0], acc_pitch_buffer[1], acc_pitch_buffer[2], median_pass[pitch]);
-    acc[roll] = (LP_MED_COMBO_FILTER_ALPHA * acc_roll_lp_filter.output(acc[roll])) + ((1 - LP_MED_COMBO_FILTER_ALPHA) * median_pass[roll]);
-    acc[pitch] = (LP_MED_COMBO_FILTER_ALPHA * acc_pitch_lp_filter.output(acc[pitch])) + ((1 - LP_MED_COMBO_FILTER_ALPHA) * median_pass[pitch]);
+    acc[roll] = acc_roll_lp_filter.output(median_pass[roll]);
+    acc[pitch] = acc_roll_lp_filter.output(median_pass[pitch]);
   } else {
     median_pass[roll] = acc[roll];
     median_pass[pitch] = acc[pitch];
   }
- 
   
   /* GYRO/ACC FUSION CALCULATION */
   if(startingGyroAnglesSet) {
@@ -345,7 +352,7 @@ void loop() {
 //  const float pitch_pid = pid_controller(imu_deg[pitch], rx_deg[pitch], P_GAIN_ROLL_PITCH, I_GAIN_ROLL_PITCH, D_GAIN_ROLL_PITCH, pitch);
 //  const float yaw_pid = pid_controller(imu_deg[yaw], rx_deg[yaw], P_GAIN_YAW, I_GAIN_YAW, 0, yaw);
 
-  calculate_pid(rx_deg);
+  calculate_pid(imu_deg, rx_deg);
   
   #ifdef DEBUG_PID
     if (loop_iter % PRINT_RATE == 0)  log_string(pid_output[roll], pid_output[pitch], pid_output[yaw]);
@@ -412,7 +419,7 @@ void loop() {
   }
   loop_iter++;
 
-  log_string(imu_deg[roll], rx_deg[roll]);
+//  log_string(imu_deg[roll], rx_deg[roll]);
 }
 
 /*  END LOOP  */
@@ -436,11 +443,11 @@ float pid(const float p_gain, const float i_gain, const float d_gain, const floa
   // anti-windup; prevent I term from getting too big
   if(*i_output > i_thresh) *i_output = i_thresh;
   else if(*i_output < -i_thresh) *i_output = -i_thresh;
-  
-  *error_prior = error;
-  
+    
   // combine output
   float output = (p_gain * error) + (*i_output) + (d_gain * (error - *error_prior));
+
+  *error_prior = error;
   
   if(output > max_output) output = max_output;
   else if(output < -max_output) output = -max_output;
@@ -449,39 +456,54 @@ float pid(const float p_gain, const float i_gain, const float d_gain, const floa
 }
 
 // angle controller gains
-const float P_GAIN_ROLL_PITCH_ANGLE = 0;
+const float P_GAIN_ROLL_PITCH_ANGLE = 0;  // 3-5
 const float I_GAIN_ROLL_PITCH_ANGLE = 0;
 const float D_GAIN_ROLL_PITCH_ANGLE = 0;
 const float P_GAIN_YAW_ANGLE = 0;
 const float I_GAIN_YAW_ANGLE = 0;
 // rate controller gains
-const float P_GAIN_ROLL_PITCH_RATE = 0;
+const float P_GAIN_ROLL_PITCH_RATE = 0;  // 1.25 good; 0.5 too low; 1 doesn't compensate enough at -5deg/s; 1.5 is too noisy at -5deg/s
 const float I_GAIN_ROLL_PITCH_RATE = 0;
-const float D_GAIN_ROLL_PITCH_RATE = 0;
+const float D_GAIN_ROLL_PITCH_RATE = 0;  // increment by 0.01 at a time
 const float P_GAIN_YAW_RATE = 0;
 const float I_GAIN_YAW_RATE = 0;
 
-float calculate_pid(float rx_deg[]) {
+float angle_pid[3], rate_pid[3];
+
+float calculate_pid(float imu_deg[], float rx_deg[]) {
   // Angle Controller
   // ----------------
   // input: imu_deg (deg)
   // setpoint: rx_deg (deg)
-  float roll_angle_pid = angle_controller(imu_deg[roll], rx_deg[roll], P_GAIN_ROLL_PITCH_ANGLE, I_GAIN_ROLL_PITCH_ANGLE, D_GAIN_ROLL_PITCH_ANGLE, roll);
-  float pitch_angle_pid = angle_controller(imu_deg[pitch], rx_deg[pitch], P_GAIN_ROLL_PITCH_ANGLE, I_GAIN_ROLL_PITCH_ANGLE, D_GAIN_ROLL_PITCH_ANGLE, pitch);
-  float yaw_angle_pid = angle_controller(imu_deg[yaw], rx_deg[yaw], P_GAIN_YAW_ANGLE, I_GAIN_YAW_ANGLE, 0, yaw);
+  if (loop_iter % 5) {
+    angle_pid[roll] = angle_controller(rx_deg[roll], imu_deg[roll], P_GAIN_ROLL_PITCH_ANGLE, I_GAIN_ROLL_PITCH_ANGLE, D_GAIN_ROLL_PITCH_ANGLE, roll);
+    angle_pid[pitch] = angle_controller(rx_deg[pitch], imu_deg[pitch], P_GAIN_ROLL_PITCH_ANGLE, I_GAIN_ROLL_PITCH_ANGLE, D_GAIN_ROLL_PITCH_ANGLE, pitch);
+    angle_pid[yaw] = angle_controller(rx_deg[yaw], imu_deg[yaw], P_GAIN_YAW_ANGLE, I_GAIN_YAW_ANGLE, 0, yaw);
+  }
+
+  // limit angular velocity
+  if (angle_pid[roll] > 200) angle_pid[roll] = 200;
+  else if (angle_pid[roll] < -200) angle_pid[roll] = -200;
+  if (angle_pid[pitch] > 200) angle_pid[pitch] = 200;
+  else if (angle_pid[pitch] < -200) angle_pid[pitch] = -200;
   
   // Rate Controller
   // ----------------
   // input: gyro_dot (deg/s)
   // setpoint: output from angle controller (deg/s)
-//  float roll_rate_pid = angle_controller(gyro_dot[roll], roll_angle_pid, P_GAIN_ROLL_PITCH, I_GAIN_ROLL_PITCH, D_GAIN_ROLL_PITCH, roll);
-  float roll_rate_pid = rate_controller(gyro_dot[roll], 0, P_GAIN_ROLL_PITCH_RATE, I_GAIN_ROLL_PITCH_RATE, D_GAIN_ROLL_PITCH_RATE, roll);
-  float pitch_rate_pid = rate_controller(gyro_dot[pitch], 0, P_GAIN_ROLL_PITCH_RATE, I_GAIN_ROLL_PITCH_RATE, D_GAIN_ROLL_PITCH_RATE, pitch);
-  float yaw_rate_pid = rate_controller(gyro_dot[yaw], 0, P_GAIN_YAW_RATE, I_GAIN_YAW_RATE, 0, yaw);
+//  rate_pid[roll] = rate_controller(gyro_dot_lp[roll], angle_pid[roll], P_GAIN_ROLL_PITCH_RATE, I_GAIN_ROLL_PITCH_RATE, D_GAIN_ROLL_PITCH_RATE, roll);
+  rate_pid[roll] = rate_controller(gyro_dot_lp[roll], -4, P_GAIN_ROLL_PITCH_RATE, I_GAIN_ROLL_PITCH_RATE, D_GAIN_ROLL_PITCH_RATE, roll);
+  rate_pid[pitch] = rate_controller(gyro_dot_lp[pitch], 0, P_GAIN_ROLL_PITCH_RATE, I_GAIN_ROLL_PITCH_RATE, D_GAIN_ROLL_PITCH_RATE, pitch);
+  rate_pid[yaw] = rate_controller(gyro_dot_lp[yaw], 0, P_GAIN_YAW_RATE, I_GAIN_YAW_RATE, 0, yaw);
 
-  pid_output[roll] = roll_rate_pid;
-  pid_output[pitch] = pitch_rate_pid;
-  pid_output[yaw] = yaw_rate_pid;
+  
+  pid_output[roll] = rate_pid[roll];
+  pid_output[pitch] = rate_pid[pitch];
+  pid_output[yaw] = rate_pid[yaw];
+
+//  if (loop_iter % 55) {
+//    log_string(time_elapsed, gyro_dot[roll], acc[roll]);
+//  }
 }
 
   
