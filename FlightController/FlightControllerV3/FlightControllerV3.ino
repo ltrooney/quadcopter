@@ -1,3 +1,5 @@
+void loop()  __attribute__((__optimize__("O2")));
+
 #include <PIDController.h>
 #include <LowPassFilter.h>
 #include <Wire.h>
@@ -43,7 +45,7 @@ const int ESC_4x_ENABLE = B11110000;
 static const int x = 0, y = 1, z = 2;
 static const int roll = 0, pitch = 1, yaw = 2;
 // Quadcopter settings
-static const int MAX_ANGLE_DEG = 10;
+static const int MAX_ANGLE_DEG = 30;
 static const int MAX_ANGLE_DEG_YAW = 25;
 // RX receiver
 static const int MIN_RX_THROTTLE = 1008;
@@ -454,15 +456,15 @@ float pid(const float p_gain, const float i_gain, const float d_gain, const floa
 }
 
 // angle controller gains
-const float P_GAIN_ROLL_PITCH_ANGLE = 0;  // 3-5
+const float P_GAIN_ROLL_PITCH_ANGLE = 3.5;  // 3-5
 const float I_GAIN_ROLL_PITCH_ANGLE = 0;
-const float D_GAIN_ROLL_PITCH_ANGLE = 0;
+const float D_GAIN_ROLL_PITCH_ANGLE = 1;
 const float P_GAIN_YAW_ANGLE = 0;
 const float I_GAIN_YAW_ANGLE = 0;
 // rate controller gains
-const float P_GAIN_ROLL_PITCH_RATE = 0.75;  // 1.25 good; 1 doesn't compensate enough at -5deg/s; 1.5 is too noisy at -5deg/s
-const float I_GAIN_ROLL_PITCH_RATE = 0.5;
-const float D_GAIN_ROLL_PITCH_RATE = 2;  // increment by 0.01 at a time
+const float P_GAIN_ROLL_PITCH_RATE = 0.525;  // .75 working; 1.25 good; 1 doesn't compensate enough at -5deg/s; 1.5 is too noisy at -5deg/s
+const float I_GAIN_ROLL_PITCH_RATE = 0.008;  // .01 working
+const float D_GAIN_ROLL_PITCH_RATE = 4;  // 1.5 working; increment by 0.01 at a time
 const float P_GAIN_YAW_RATE = 0;
 const float I_GAIN_YAW_RATE = 0;
 
@@ -473,7 +475,7 @@ float calculate_pid(float imu_deg[], float rx_deg[]) {
   // ----------------
   // input: imu_deg (deg)
   // setpoint: rx_deg (deg)
-  if (loop_iter % 5) {
+  if (loop_iter % 25 == 0) {
     angle_pid[roll] = angle_controller(rx_deg[roll], imu_deg[roll], P_GAIN_ROLL_PITCH_ANGLE, I_GAIN_ROLL_PITCH_ANGLE, D_GAIN_ROLL_PITCH_ANGLE, roll);
     angle_pid[pitch] = angle_controller(rx_deg[pitch], imu_deg[pitch], P_GAIN_ROLL_PITCH_ANGLE, I_GAIN_ROLL_PITCH_ANGLE, D_GAIN_ROLL_PITCH_ANGLE, pitch);
     angle_pid[yaw] = angle_controller(rx_deg[yaw], imu_deg[yaw], P_GAIN_YAW_ANGLE, I_GAIN_YAW_ANGLE, 0, yaw);
@@ -489,7 +491,6 @@ float calculate_pid(float imu_deg[], float rx_deg[]) {
   // ----------------
   // input: gyro_dot (deg/s)
   // setpoint: output from angle controller (deg/s)
-//  rate_pid[roll] = rate_controller(gyro_dot_lp[roll], angle_pid[roll], P_GAIN_ROLL_PITCH_RATE, I_GAIN_ROLL_PITCH_RATE, D_GAIN_ROLL_PITCH_RATE, roll);
   rate_pid[roll] = rate_controller(gyro_dot_lp[roll], angle_pid[roll], P_GAIN_ROLL_PITCH_RATE, I_GAIN_ROLL_PITCH_RATE, D_GAIN_ROLL_PITCH_RATE, roll);
   rate_pid[pitch] = rate_controller(gyro_dot_lp[pitch], 0, P_GAIN_ROLL_PITCH_RATE, I_GAIN_ROLL_PITCH_RATE, D_GAIN_ROLL_PITCH_RATE, pitch);
   rate_pid[yaw] = rate_controller(gyro_dot_lp[yaw], 0, P_GAIN_YAW_RATE, I_GAIN_YAW_RATE, 0, yaw);
@@ -503,7 +504,8 @@ float calculate_pid(float imu_deg[], float rx_deg[]) {
 //    log_string(time_elapsed, gyro_dot[roll], acc[roll]);
 //  }
 
-  log_string(time_elapsed, gyro_dot_lp[roll], angle_pid[roll], imu_deg[roll]);
+  log_string(time_elapsed, gyro_dot_lp[roll], imu_deg[roll], rx_deg[roll]);
+//  Serial.println(imu_deg[roll]);
 }
 
   
