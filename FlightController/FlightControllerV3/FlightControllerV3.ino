@@ -45,8 +45,8 @@ const int ESC_4x_ENABLE = B11110000;
 static const int x = 0, y = 1, z = 2;
 static const int roll = 0, pitch = 1, yaw = 2;
 // Quadcopter settings
-static const int MAX_ANGLE_DEG = 30;
-static const int MAX_ANGLE_DEG_YAW = 25;
+static const int MAX_ANGLE_DEG = 20;
+static const int MAX_ANGLE_DEG_YAW = 90;
 // RX receiver
 static const int MIN_RX_THROTTLE = 1008;
 static const int MAX_RX_THROTTLE = 1800;
@@ -262,7 +262,7 @@ void loop() {
   
   // compensate for offset IMU placement
   acc[roll] -= 2.0; 
-  acc[pitch] += 4.0;
+  acc[pitch] -= 2.0;
 
   // add current accelerometer readings to buffer
   enqueue(acc_roll_buffer, 3, acc[roll]);  
@@ -449,7 +449,7 @@ float pid(const float p_gain, const float i_gain, const float d_gain, const floa
 }
 
 // angle controller gains
-const float P_GAIN_ROLL_PITCH_ANGLE = 3.5;  // 3-5
+const float P_GAIN_ROLL_PITCH_ANGLE = 3;  // 3-5
 const float I_GAIN_ROLL_PITCH_ANGLE = 0.005;
 const float D_GAIN_ROLL_PITCH_ANGLE = 0;
 const float P_GAIN_YAW_ANGLE = 3;
@@ -479,6 +479,8 @@ float calculate_pid(float imu_deg[], float rx_deg[]) {
   else if (angle_pid[roll] < -200) angle_pid[roll] = -200;
   if (angle_pid[pitch] > 200) angle_pid[pitch] = 200;
   else if (angle_pid[pitch] < -200) angle_pid[pitch] = -200;
+  if (angle_pid[yaw] > 200) angle_pid[yaw] = 200;
+  else if (angle_pid[yaw] < -200) angle_pid[yaw] = -200;
   
   // Rate Controller
   // ----------------
@@ -487,7 +489,6 @@ float calculate_pid(float imu_deg[], float rx_deg[]) {
   rate_pid[roll] = rate_controller(gyro_dot_lp[roll], angle_pid[roll], P_GAIN_ROLL_PITCH_RATE, I_GAIN_ROLL_PITCH_RATE, D_GAIN_ROLL_PITCH_RATE, roll);
   rate_pid[pitch] = rate_controller(gyro_dot_lp[pitch], angle_pid[pitch], P_GAIN_ROLL_PITCH_RATE, I_GAIN_ROLL_PITCH_RATE, D_GAIN_ROLL_PITCH_RATE, pitch);
   rate_pid[yaw] = rate_controller(gyro_dot_lp[yaw], angle_pid[yaw], P_GAIN_YAW_RATE, I_GAIN_YAW_RATE, 0, yaw);
-
   
   pid_output[roll] = rate_pid[roll];
   pid_output[pitch] = rate_pid[pitch];
